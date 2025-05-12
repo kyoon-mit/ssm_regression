@@ -1,3 +1,4 @@
+import os
 from s4d import S4D
 import torch.nn as nn
 dropout_fn = nn.Dropout2d
@@ -5,21 +6,29 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 import numpy as np
+import wandb
+from datetime import datetime
 
 d_input = 1 # number of channels (here only one time series -> 1)
 d_output = 2 # number of outputs (here regression, so one output, can be several, if we want to regress several quantities)
 
-datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
-modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/'
+# datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
+# modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/'
+datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO'
+modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models'
 
 # Load datasets
 from data import DataGenerator
 
-train_data = torch.load(datadir+'train.pt')
-val_data = torch.load(datadir+'val.pt')
+train_dict = torch.load(os.path.join(datadir, 'train.pt'))
+val_dict = torch.load(os.path.join(datadir, 'val.pt'))
+
+train_data = DataGenerator(train_dict)
+val_data = DataGenerator(val_dict)
 
 TRAIN_BATCH_SIZE = 1000
 VAL_BATCH_SIZE = 1000
+
 train_data_loader = DataLoader(
     train_data, batch_size=TRAIN_BATCH_SIZE,
     shuffle=True
@@ -29,12 +38,14 @@ val_data_loader = DataLoader(
     shuffle=True
 )
 
-def reshaping(array):
-        inputs = array[3][:,0,:]
-        inputs = inputs[:,:, np.newaxis]
-        targets = array[1][:,0,0:2]
-        return inputs, targets
+def reshaping(batch):
+    theta_u, theta_s, data_u, data_s = batch
 
+    # remove repeat (take only first repeat for unshifted data)
+    inputs = data_u[:, 0, :].unsqueeze(-1) if data_u.ndim == 3 else data_u.unsqueeze(-1)  # [B, 200, 1]
+    targets = theta_u[:, 0, :2] if theta_u.ndim == 3 else theta_u[:, :2]  # [B, 2]
+
+    return inputs, targets
 
 # definition of SSM here
 class S4Model(nn.Module):
@@ -92,8 +103,6 @@ class S4Model(nn.Module):
         x = self.decoder(x)  # (B, d_model) -> (B, d_output)
         return x
 
-
-
 # Model
 import torch
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -131,7 +140,6 @@ def setup_optimizer(model, lr, weight_decay, epochs):
             f"Optimizer group {i}",
             f"{len(g['params'])} tensors",
         ] + [f"{k} {v}" for k, v in group_hps.items()]))
-
     return optimizer, scheduler
 
 criterion = nn.MSELoss()
@@ -142,22 +150,18 @@ start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 doc_loss = []
 doc_val = []
 
-import os
-
 # Training
 from tqdm.auto import tqdm
 def train():
     model.train()
     train_loss = 0
     pbar = tqdm(enumerate(train_data_loader))
-    for batch_idx, val in pbar:
-
-        inputs, targets = reshaping(val)
-
+    for batch_idx, vals in pbar:
+        inputs, targets = reshaping(vals)
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
+
         outputs = model(inputs)
-        
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
@@ -169,6 +173,7 @@ def train():
             (batch_idx, len(train_data_loader), train_loss/(batch_idx+1))
         )
         doc_loss.append(train_loss/(batch_idx+1))
+    return train_loss / len(train_data_loader)
 
 def eval(epoch, dataloader, checkpoint=False):
     global best_loss
@@ -176,17 +181,21 @@ def eval(epoch, dataloader, checkpoint=False):
     eval_loss = 0
     with torch.no_grad():
         pbar = tqdm(enumerate(dataloader))
-        for batch_idx, (inputs, targets) in pbar:
+        for batch_idx, vals in pbar:
+            inputs, targets = reshaping(vals)
             inputs, targets = inputs.to(device), targets.to(device)
+            
             outputs = model(inputs)
             loss = criterion(outputs, targets)
 
             eval_loss += loss.item()
+
             pbar.set_description(
                 'Batch Idx: (%d/%d) | Loss: %.3f' %
                 (batch_idx, len(dataloader), eval_loss/(batch_idx+1))
             )
             doc_val.append(eval_loss/(batch_idx+1))
+    return eval_loss / len(dataloader)
 
     # Save checkpoint.
     if checkpoint:
@@ -200,24 +209,37 @@ def eval(epoch, dataloader, checkpoint=False):
                 os.mkdir('checkpoint')
             torch.save(state, './checkpoint/ckpt.pth')
             best_loss = loss
-        
-
         return loss
 
-pbar = tqdm(range(start_epoch, 10))
-for epoch in pbar:
-    if epoch == 0:
-        pbar.set_description('Epoch: %d' % (epoch))
-    else:
-        pbar.set_description('Epoch: %d | Val loss: %1.3f' % (epoch, val_loss))
-    train()
-    val_loss = eval(epoch, val_data_loader, checkpoint=True)
-    #eval(epoch, test_loader)
-    scheduler.step()
+if __name__=='__main__':
 
-import time
-timestr = time.strftime("%Y%m%d-%H%M%S")
-torch.save(model.state_dict(), modeldir+'model.SSM.'+timestr+'.path')
-                                                                                       
+    timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
+    wandb.init(project='ssm_regression', name=f'{timestamp}_regression.py')
 
+    print('Start training...')
+
+    EPOCHS = 200
+
+    pbar = tqdm(range(start_epoch, EPOCHS))
+    for epoch_number in pbar:
+        avg_train_loss = train()
+        avg_val_loss = eval(epoch_number, val_data_loader, checkpoint=True)
+        if epoch_number == 0:
+            pbar.set_description('Epoch: %d' % (epoch_number))
+        else:
+            pbar.set_description('Epoch: %d | Val loss: %1.3f' % (epoch_number, avg_val_loss))
+        #eval(epoch, test_loader)
+        scheduler.step()
+
+        wandb.log({
+            'epoch': epoch_number,
+            'train_loss': avg_train_loss,
+            'val_accuracy': avg_val_loss,
+        })
+
+    wandb.finish()
+
+    import time
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    torch.save(model.state_dict(), os.path.join(modeldir, f'model.SSM.{timestr}.path'))

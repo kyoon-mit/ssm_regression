@@ -1,3 +1,4 @@
+import os
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
@@ -7,12 +8,18 @@ from nflows.flows import Flow
 from nflows.transforms.autoregressive import MaskedAffineAutoregressiveTransform
 from nflows.transforms import CompositeTransform, RandomPermutation
 
+import wandb
+from datetime import datetime
+
 import nflows.utils as torchutils
 from models import SimilarityEmbedding
 
-datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
-pretraining = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/model.CNN.20250408-111215.path'
-modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/'
+# datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
+# pretraining = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/model.CNN.20250408-111215.path'
+# modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/'
+datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO'
+modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models'
+pretraining = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path'
 
 num_transforms = 5
 num_blocks = 4
@@ -21,14 +28,21 @@ context_features = 3 # needs to fit the pretraining embedding dimensionality
 num_points = 200 # length of time series
 num_repeats = 10 # number of augmentations
 
+timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+
+wandb.init(project='ssm_regression', name=f'{timestamp}_parameter_estimation.py')
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 # Load datasets
 from data import DataGenerator
 
-train_data = torch.load(datadir+'train.pt')
-val_data = torch.load(datadir+'val.pt')
+train_dict = torch.load(os.path.join(datadir, 'train.pt'))
+val_dict = torch.load(os.path.join(datadir, 'val.pt'))
+
+train_data = DataGenerator(train_dict)
+val_data = DataGenerator(val_dict)
 
 TRAIN_BATCH_SIZE = 1000
 VAL_BATCH_SIZE = 1000
@@ -41,7 +55,6 @@ val_data_loader = DataLoader(
     val_data, batch_size=VAL_BATCH_SIZE,
     shuffle=True
 )
-
 
 # define model
 class EmbeddingNet(nn.Module):
@@ -145,30 +158,41 @@ def val_one_epoch(epoch_index):
             running_loss = 0.
     return last_loss
 
-optimizer = optim.SGD(flow.parameters(), lr=1e-4, momentum=0.5)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, threshold=0.01)
+if __name__=='__main__':
 
-EPOCHS = 10
+    optimizer = optim.SGD(flow.parameters(), lr=1e-4, momentum=0.5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, threshold=0.01)
 
-for epoch in range(EPOCHS):
-    print('EPOCH {}:'.format(epoch + 1))
-    # Gradient tracking
-    flow.train(True)
-    avg_train_loss = train_one_epoch(epoch)
+    EPOCHS = 200
 
-    # no gradient tracking, for validation
-    flow.train(False)
-    avg_val_loss = val_one_epoch(epoch)
+    for epoch_number in range(EPOCHS):
+        print(f'EPOCH {epoch_number + 1}')
+        # Gradient tracking
+        flow.train(True)
+        avg_train_loss = train_one_epoch(epoch_number)
 
-    print(f"Train/Val flow Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
-    for param_group in optimizer.param_groups:
-        print("Current LR = {:.3e}".format(param_group['lr']))
-    epoch += 1
-    try:
-        scheduler.step(avg_val_loss)
-    except TypeError:
-        scheduler.step()
+        # no gradient tracking, for validation
+        flow.train(False)
+        avg_val_loss = val_one_epoch(epoch_number)
 
-import time
-timestr = time.strftime("%Y%m%d-%H%M%S")
-torch.save(flow.state_dict(), modeldir+'flow.CNN.'+timestr+'.path')
+        print(f"Train/Val flow Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
+
+        wandb.log({
+            'epoch': epoch_number,
+            'train_loss': avg_train_loss,
+            'val_accuracy': avg_val_loss,
+        })
+
+        for param_group in optimizer.param_groups:
+            print("Current LR = {:.3e}".format(param_group['lr']))
+        epoch_number += 1
+        try:
+            scheduler.step(avg_val_loss)
+        except TypeError:
+            scheduler.step()
+
+    wandb.finish()
+
+    import time
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    torch.save(flow.state_dict(), os.path.join(modeldir, f'flow.CNN.{timestr}.path'))

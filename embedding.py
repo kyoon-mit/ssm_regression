@@ -1,19 +1,31 @@
+import os
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 from torch import nn, optim
+import wandb
+from datetime import datetime
+
+timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+
+wandb.init(project='ssm_regression', name=f'{timestamp}_embedding.py')
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
-datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
-modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/'
+# datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
+# modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/'
+datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO'
+modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models'
 
 # Load datasets
 from data import DataGenerator
 
-train_data = torch.load(datadir+'train.pt')
-val_data = torch.load(datadir+'val.pt')
+train_dict = torch.load(os.path.join(datadir, 'train.pt'))
+val_dict = torch.load(os.path.join(datadir, 'val.pt'))
+
+train_data = DataGenerator(train_dict)
+val_data = DataGenerator(val_dict)
 
 TRAIN_BATCH_SIZE = 1000 
 VAL_BATCH_SIZE = 1000 
@@ -50,7 +62,7 @@ for name, param in similarity_embedding.named_parameters():
         sum_param+=param.numel()
 print('trainable parameters:',sum_param)
 
-# Definition of training cicle
+# Definition of training cycle
 def train_one_epoch(epoch_index, **vicreg_kwargs):
     running_sim_loss = 0.
     last_sim_loss = 0.
@@ -112,36 +124,46 @@ def val_one_epoch(epoch_index, **vicreg_kwargs):
     #tb_writer.flush()
     return last_sim_loss
 
-print('Start training...')
+if __name__=='__main__':
 
-EPOCHS = 10 
+    print('Start training...')
 
-for epoch_number in range(EPOCHS):
-    print('EPOCH {}:'.format(epoch_number + 1))
-    wt_repr, wt_cov, wt_std = (1, 1, 1)
+    EPOCHS = 200
 
-    if epoch_number < 20:
-        wt_repr, wt_cov, wt_std = (5, 1, 5)
-    elif epoch_number < 45:
-        wt_repr, wt_cov, wt_std = (2, 2, 1)
+    for epoch_number in range(EPOCHS):
+        print('EPOCH {}:'.format(epoch_number + 1))
+        wt_repr, wt_cov, wt_std = (1, 1, 1)
 
-    print(f"VicReg wts: {wt_repr=} {wt_cov=} {wt_std=}")
-    # Gradient tracking
-    similarity_embedding.train(True)
-    avg_train_loss = train_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
-    
-    # no gradient tracking, for validation
-    similarity_embedding.train(False)
-    avg_val_loss = val_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
-    
-    print(f"Train/Val Sim Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
+        if epoch_number < 20:
+            wt_repr, wt_cov, wt_std = (5, 1, 5)
+        elif epoch_number < 45:
+            wt_repr, wt_cov, wt_std = (2, 2, 1)
 
-    epoch_number += 1
-    try:
-        scheduler.step(avg_val_loss)
-    except TypeError:
-        scheduler.step()
+        print(f"VicReg wts: {wt_repr=} {wt_cov=} {wt_std=}")
+        # Gradient tracking
+        similarity_embedding.train(True)
+        avg_train_loss = train_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
+        
+        # no gradient tracking, for validation
+        similarity_embedding.train(False)
+        avg_val_loss = val_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
+        
+        print(f"Train/Val Sim Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
 
-import time
-timestr = time.strftime("%Y%m%d-%H%M%S")
-torch.save(similarity_embedding.state_dict(), modeldir+'model.CNN.'+timestr+'.path')
+        wandb.log({
+            'epoch': epoch_number,
+            'train_loss': avg_train_loss,
+            'val_accuracy': avg_val_loss,
+        })
+
+        epoch_number += 1
+        try:
+            scheduler.step(avg_val_loss)
+        except TypeError:
+            scheduler.step()
+
+    wandb.finish()
+
+    import time
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    torch.save(similarity_embedding.state_dict(), os.path.join(modeldir, f'model.CNN.{timestr}.path'))

@@ -78,24 +78,24 @@ def generate_dataset():
     return theta_unshifted_vals, theta_shifted_vals, data_unshifted_vals, data_shifted_vals
 
 class DataGenerator(Dataset):
-    def __init__(self, theta_u, theta_s, data_u, data_s):
-        self.theta_unshifted_vals = theta_u
-        self.theta_shifted_vals = theta_s
-        self.data_unshifted_vals = data_u
-        self.data_shifted_vals = data_s
+    def __init__(self, data):
+        self.theta_unshifted_vals = data['theta_unshifted']
+        self.theta_shifted_vals   = data['theta_shifted']
+        self.data_unshifted_vals  = data['data_unshifted']
+        self.data_shifted_vals    = data['data_shifted']
 
     def __len__(self):
-        return num_simulations
+        return self.theta_unshifted_vals.shape[0]
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
         # return shifted and unshifted theta and data
         return (
-            theta_unshifted_vals[idx].to(dtype=torch.float32),
-            theta_shifted_vals[idx].to(dtype=torch.float32),
-            data_unshifted_vals[idx].to(dtype=torch.float32),
-            data_shifted_vals[idx].to(dtype=torch.float32),
+            self.theta_unshifted_vals[idx].to(dtype=torch.float32),
+            self.theta_shifted_vals[idx].to(dtype=torch.float32),
+            self.data_unshifted_vals[idx].to(dtype=torch.float32),
+            self.data_shifted_vals[idx].to(dtype=torch.float32),
         )
 
 def save_raw_tensors(theta_u, theta_s, data_u, data_s):
@@ -106,12 +106,12 @@ def save_raw_tensors(theta_u, theta_s, data_u, data_s):
     data_shifted    = torch.stack(data_shifted_vals)
 
     # Split indices
-    num_total = theta_unshifted.shape[0]
+    num_total  = theta_unshifted.shape[0]
     train_size = int(0.8 * num_total)
     val_size   = int(0.1 * num_total)
     test_size  = num_total - train_size - val_size
 
-    indices = torch.randperm(num_total)
+    indices   = torch.randperm(num_total)
     train_idx = indices[:train_size]
     val_idx   = indices[train_size:train_size + val_size]
     test_idx  = indices[train_size + val_size:]
