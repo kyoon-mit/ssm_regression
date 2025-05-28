@@ -8,18 +8,18 @@ from datetime import datetime
 
 timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
-wandb.init(project='ssm_regression', name=f'{timestamp}_embedding.py')
+wandb.init(project='ssm_sg_regression', name=f'{timestamp}_embedding.py')
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 # datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
 # modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/'
-datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO'
-modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models'
+datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian'
+modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models'
 
 # Load datasets
-from data import DataGenerator
+from data_sinegaussian import DataGenerator
 
 train_dict = torch.load(os.path.join(datadir, 'train.pt'))
 val_dict = torch.load(os.path.join(datadir, 'val.pt'))
@@ -47,11 +47,11 @@ vicreg_loss = VICRegLoss()
 similarity_embedding = SimilarityEmbedding(num_hidden_layers_h=2).to(device)
 # setup scheduler
 optimizer = optim.Adam(similarity_embedding.parameters(), lr=5e-3)
-scheduler_1 = optim.lr_scheduler.ConstantLR(optimizer, total_iters=2)
-scheduler_2 = optim.lr_scheduler.OneCycleLR(optimizer, total_steps=200, max_lr=5e-4)
+scheduler_1 = optim.lr_scheduler.ConstantLR(optimizer, total_iters=20)
+scheduler_2 = optim.lr_scheduler.OneCycleLR(optimizer, total_steps=20, max_lr=5e-4)
 scheduler_3 = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
 scheduler = optim.lr_scheduler.SequentialLR(
-    optimizer, schedulers=[scheduler_1, scheduler_2, scheduler_3], milestones=[50, 150])
+    optimizer, schedulers=[scheduler_1, scheduler_2, scheduler_3], milestones=[20, 40])
 
 print('...done loading model!')
 
@@ -164,6 +164,4 @@ if __name__=='__main__':
 
     wandb.finish()
 
-    import time
-    timestr = time.strftime("%Y%m%d-%H%M%S")
-    torch.save(similarity_embedding.state_dict(), os.path.join(modeldir, f'model.CNN.{timestr}.path'))
+    torch.save(similarity_embedding.state_dict(), os.path.join(modeldir, f'model.CNN.{timestamp}.path'))

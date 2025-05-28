@@ -14,12 +14,12 @@ from datetime import datetime
 import nflows.utils as torchutils
 from models import SimilarityEmbedding
 
-# datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
-# pretraining = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/model.CNN.20250408-111215.path'
-# modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/'
-datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO'
-modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models'
-pretraining = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path'
+# datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SineGaussian/'
+# pretraining = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SineGaussian/models/model.CNN.20250408-111215.path'
+# modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SineGaussian/models/'
+datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian'
+modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models'
+pretraining = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.CNN.SineGaussian.20250527-232830.path'
 
 num_transforms = 5
 num_blocks = 4
@@ -30,13 +30,13 @@ num_repeats = 10 # number of augmentations
 
 timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
-wandb.init(project='ssm_regression', name=f'{timestamp}_parameter_estimation.py')
+wandb.init(project='ssm_sg_regression', name=f'{timestamp}_parameter_estimation.py')
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 # Load datasets
-from data import DataGenerator
+from data_sinegaussian import DataGenerator
 
 train_dict = torch.load(os.path.join(datadir, 'train.pt'))
 val_dict = torch.load(os.path.join(datadir, 'val.pt'))
@@ -193,6 +193,4 @@ if __name__=='__main__':
 
     wandb.finish()
 
-    import time
-    timestr = time.strftime("%Y%m%d-%H%M%S")
-    torch.save(flow.state_dict(), os.path.join(modeldir, f'flow.CNN.{timestr}.path'))
+    torch.save(flow.state_dict(), os.path.join(modeldir, f'flow.CNN.{timestamp}.path'))

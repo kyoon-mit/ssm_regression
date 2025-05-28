@@ -29,9 +29,11 @@ class SSMRegression():
         self.n_layers = n_layers
         self.dropout = dropout
         self.prenorm = prenorm
+        self.datatype = datatype
+        self.loss = loss
 
-        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/{datatype}'
-        self.modeldir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/{datatype}/models'
+        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/{self.datatype}'
+        self.modeldir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/{self.datatype}/models'
 
         # Load datasets
         if datatype=='SineGaussian':
@@ -58,8 +60,6 @@ class SSMRegression():
             self.val_data, batch_size=self.VAL_BATCH_SIZE,
             shuffle=True
         )
-
-        self.loss = loss
 
         self.device = None
         self.model = None
@@ -268,6 +268,4 @@ if __name__=='__main__':
 
     wandb.finish()
 
-    import time
-    timestr = time.strftime("%Y%m%d-%H%M%S")
-    torch.save(task.model.state_dict(), os.path.join(task.modeldir, f'model.SSM.{self.loss}.{timestr}.path'))
+    torch.save(task.model.state_dict(), os.path.join(task.modeldir, f'model.SSM.{task.datatype}.{task.loss}.{timestamp}.path'))
