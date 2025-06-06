@@ -146,6 +146,34 @@ class Plotter:
                 break
         return outputs_by_bin, legends
 
+    def extract_timestamp(self, filepath, sep='_'):
+        """ Extracts the timestamp from the filename in the format '<directory>/YYYYMMDDHHMMSS.path'.
+        Args:
+            filepath (str): Path to the file from which to extract the timestamp.
+            sep (str): Separator used in the filename. Default is '_'.
+        Returns:
+            str: The extracted timestamp in the format sep + 'YYYYMMDDHHMMSS', or '' if not found.
+        Raises:
+            ValueError: If the file path does not exist, is not a string, or does not end with '.path'.
+            ValueError: If the filename does not match the expected format.
+            ValueError: If the timestamp is not found in the filename.
+        """
+        import re
+        if not os.path.exists(filepath):
+            raise ValueError(f"File path '{filepath}' does not exist.")
+        if not isinstance(filepath, str):
+            raise ValueError("File path must be a string.")
+        if not filepath.endswith('.path'):
+            raise ValueError("File path must end with '.path'.")
+        if not isinstance(sep, str):
+            raise ValueError("Separator must be a string.")
+        filename = os.path.basename(filepath)
+        match = re.search(r'(\d{12})\.path$', filename)
+        if match:
+            return sep + match.group(1)
+        else:
+            return ''
+
     def make_embedding_plots(self, outputs_by_interval, legends, save_name='embedding_plot.png', num_dim=3, title=None):
         """
         Create a corner plot from the similarity outputs.
@@ -238,10 +266,11 @@ class Plotter:
         )
 
         # Plot the similarity outputs
+        timestamp = self.extract_timestamp(model_path, sep='_')
         fig = self.make_embedding_plots(
             outputs_by_interval=similarity_outputs,
             legends=legends,
-            save_name=f'{self.datatype}_embeddings_plot.png',
+            save_name=f'embedddings_{self.datatype}{timestamp}_space.png',
             num_dim=3,
             title=plot_title
         )
@@ -252,6 +281,20 @@ class Plotter:
         std = predictions.std()
         z_scores = (predictions - truths) / std
         return z_scores
+
+    def dump_to_csv(self, outputs, filename='ssm_outputs.csv'):
+        """
+        Dumps the outputs to a CSV file.
+        Args:
+            outputs (dict): Dictionary containing the outputs to be saved.
+            filename (str): Name of the output CSV file.
+        """
+        import pandas as pd
+
+        df = pd.DataFrame(outputs)
+        df.to_csv(os.path.join(self.save_path, filename), index=False)
+        print(f'Saved outputs to {filename}')
+        return df
 
     def ssm_reshaping(self, batch, input_dim=1, output_dim=2):
         theta_u, theta_s, data_u, data_s = batch
@@ -265,7 +308,22 @@ class Plotter:
 
         return inputs, targets
 
-    def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16, compute_on_cpu=False):
+    def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16, compute_on_cpu=False, csv_output=False, timestamp=''):
+        """
+        Computes predictions and truths for the SSM model on the test data.
+
+        Args:
+            ssm_model (nn.Module): The SSM model to evaluate.
+            loss (str): Loss function used in the model ('NLLGaussian' or 'Quantile').
+            batch_size (int): Number of samples to process in each batch.
+            compute_on_cpu (bool): If True, move computations to CPU.
+            csv_output (bool): If True, save outputs to a CSV file.
+            timestamp (str): Timestamp to append to the output filename.
+
+        Returns:
+            dict: Dictionary containing predictions and truths.
+        """
+
         pred_param1, truth_param1 = [], []
         pred_param2, truth_param2 = [], []
         if loss=='NLLGaussian':
@@ -341,24 +399,28 @@ class Plotter:
             return_dict['pred_q75_1'] = torch.tensor(pred_q75_1)
             return_dict['pred_q75_2'] = torch.tensor(pred_q75_2)
 
+        if csv_output:
+            self.dump_to_csv(return_dict, filename=f'ssm_{self.datatype}_{loss}{timestamp}_outputs.csv')
+
         return return_dict
 
-    def plot_ssm_predictions(self, model_path='', save_prefix='ssm', loss='NLLGaussian'):
+    def plot_ssm_predictions(self, model_path='', save_prefix='ssm', loss='NLLGaussian', csv_output=False):
+        timestamp = self.extract_timestamp(model_path, sep='_')
         from models import S4Model
         if loss=='NLLGaussian':
-            d_input, d_output, d_model, n_layers = 1, 4, 6, 4
+            d_input, d_model, n_layers = 1, 6, 4
         elif loss=='Quantile':
-            d_input, d_output, d_model, n_layers = 1, 6, 6, 4
+            d_input, d_model, n_layers = 1, 6, 4
         else:
             raise ValueError(f'Unknown loss function: {loss}')
         if not model_path or not os.path.exists(model_path):
             raise ValueError(f"Model path '{model_path}' does not exist or was not provided.")
-        self.ssm_model = S4Model(d_input=d_input, d_output=d_output, d_model=d_model, n_layers=n_layers, dropout=0.0, prenorm=False)
+        self.ssm_model = S4Model(d_input=d_input, loss_type=loss, d_model=d_model, n_layers=n_layers, dropout=0.0, prenorm=False)
         self.ssm_model = self.ssm_model.to(self.device)
-        self.ssm_model.load_state_dict(torch.load(model_path, map_location=self.device))
+        self.ssm_model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
         self.ssm_model.eval()
 
-        ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=16, compute_on_cpu=False)
+        ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=16, compute_on_cpu=False, csv_output=csv_output, timestamp=timestamp)
 
         # Compute differences between predictions and truths
         ssm_diffs = {
@@ -374,9 +436,11 @@ class Plotter:
 
         # Create a corner plot
         if self.datatype=='SHO':
-            labels_diffs = [r'$\Delta \omega_0$', r'$\Delta \beta$']
+            labels_vars  = [r'$\omega_0$', r'$\beta$']
+            labels_diffs = [r'$\hat{\omega}_0 - \omega_0$', r'$\hat{\beta} - \beta$']
         elif self.datatype=='SineGaussian':
-            labels_diffs = [r'$\Delta f_0$', r'$\Delta \tau$']
+            labels_vars  = [r'$f_0$', r'$\tau$']
+            labels_diffs = [r'$\hat{f_0} - f_0$', r'$\hat{\tau} - \tau$']
         figure_diffs = corner.corner(
             ssm_diffs_stacked,
             labels=labels_diffs,
@@ -387,27 +451,29 @@ class Plotter:
             title_fmt='.2f',
             color='C1'
         )
+        figure_diffs.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        figure_diffs.subplots_adjust(top=0.87)
 
         # Plot uncertainties
         if loss == 'NLLGaussian':
-            uncertainties = np.sqrt(np.exp(
+            uncertainties_stacked = np.sqrt(
                 np.stack(
                     [ssm_outputs['pred_sigma1'].numpy(), ssm_outputs['pred_sigma2'].numpy()],
                     axis=1
                 )
-            ))
+            )
         elif loss == 'Quantile':
-            uncertainties = np.stack(
+            uncertainties_stacked = np.stack(
                 [ssm_outputs['pred_q75_1'].numpy() - ssm_outputs['pred_q25_1'].numpy(),
                  ssm_outputs['pred_q75_2'].numpy() - ssm_outputs['pred_q25_2'].numpy()],
                 axis=1
             )
         if self.datatype == 'SHO':
-            labels_uncertainties = [r'$\sigma_{\omega_0}$', r'$\sigma_{\beta}$']
+            labels_uncertainties = [r'$\hat{\sigma}_{\omega_0}$', r'$\hat{\sigma}_{\beta}$']
         elif self.datatype == 'SineGaussian':
-            labels_uncertainties = [r'$\sigma_{f_0}$', r'$\sigma_{\tau}$']
+            labels_uncertainties = [r'$\hat{\sigma}_{f_0}$', r'$\hat{\sigma}_{\tau}$']
         figure_uncertainties = corner.corner(
-            uncertainties,
+            uncertainties_stacked,
             labels=labels_uncertainties,
             quantiles=[0.16, 0.5, 0.84],
             show_titles=True,
@@ -416,16 +482,40 @@ class Plotter:
             title_fmt='.2f',
             color='C3'
         )
+        figure_uncertainties.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        figure_uncertainties.subplots_adjust(top=0.87)
+
+        # Make plots of (diff)/(uncertainty)
+        z_scores_stacked = ssm_diffs_stacked / uncertainties_stacked
+        labels_z_scores = [f'({labels_diffs[i]})/{labels_uncertainties[i]}' for i in range(len(labels_vars))]
+        figure_z_scores = corner.corner(
+            z_scores_stacked,
+            quantiles=[0.16, 0.5, 0.84],
+            labels=labels_z_scores,
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C4'
+        )
+        figure_z_scores.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        figure_z_scores.subplots_adjust(top=0.87)
 
         # Save the figures
         if self.save_path is not None:
-            figure_diffs.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_diffs.png'), bbox_inches='tight')
-            figure_uncertainties.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_uncertainties_{loss}.png'), bbox_inches='tight')
+            figure_diffs.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}{timestamp}_diffs.png'), bbox_inches='tight')
+            figure_uncertainties.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_uncertainties.png'), bbox_inches='tight')
+            figure_z_scores.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_z_scores.png'), bbox_inches='tight')
         else:
             figure_diffs.tight_layout()
             figure_diffs.show()
             figure_uncertainties.tight_layout()
             figure_uncertainties.show()
+            figure_z_scores.tight_layout()
+            figure_z_scores.show()
+
+        print(f'Saved SSM predictions plots to {self.save_path}')
+        print(f'SSM predictions computed with loss={loss}')
 
         return
 
@@ -433,15 +523,16 @@ if __name__ == "__main__":
     # plotter = Plotter(datatype='SHO')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path',
     #                         num_hidden_layers_h=2)
-    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.NLLGaussian.20250528-005313.path',
+    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.NLLGaussian.250530144002.path',
     #                              save_prefix='ssm', loss='NLLGaussian')
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.Quantile.20250528-013120.path',
     #                              save_prefix='ssm', loss='Quantile')
+
     plotter = Plotter(datatype='SineGaussian')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path',
     #                         num_hidden_layers_h=2)
-    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.NLLGaussian.20250527-211554.path',
-                                 save_prefix='ssm', loss='NLLGaussian')
-    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.Quantile.20250528-005641.path',
-                                 save_prefix='ssm', loss='Quantile')
+    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.NLLGaussian.250602141754.path',
+                                 save_prefix='ssm', loss='NLLGaussian', csv_output=True)
+    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.Quantile.20250528-005641.path',
+    #                              save_prefix='ssm', loss='Quantile')
     # Replace '/path/to/your/model.pth' with the actual path to your trained model
