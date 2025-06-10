@@ -3,9 +3,15 @@ import numpy as np
 import scipy.stats
 import torch
 from torch.utils.data import Dataset
+import random
+
+SEED = 42
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+random.seed(SEED)
 
 # path = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
-savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian'
+savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian'
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
@@ -25,6 +31,11 @@ sigma = 0.4 # std of Gaussian to be added as noise
 def sine_gaussian(t, f_0, tau, shift=0):
     t_shift = t - shift
     data = torch.exp(-1*t_shift*t_shift / tau / tau) * torch.sin(2*torch.pi*f_0 * t_shift)
+    return data
+
+def sine_gaussian_np(t, f_0, tau, shift=0):
+    t_shift = t - shift
+    data = np.exp(-1*t_shift*t_shift / tau / tau) * np.sin(2*np.pi*f_0 * t_shift)
     return data
 
 def get_sg_data(f_0=None, tau=None, shift=None, _num_points=num_points, _sigma=sigma):
@@ -52,7 +63,7 @@ def generate_dataset():
 
     for ii in range(num_simulations):
         # generated data with a fixed shift
-        t_vals, y_unshifted, f_0, tau, shift = get_sg_data(num_points=num_points, shift=1)
+        t_vals, y_unshifted, f_0, tau, shift = get_sg_data(_num_points=num_points, shift=1)
         # create repeats
         theta_unshifted = torch.tensor([f_0, tau, shift]).repeat(num_repeats, 1).to(device=device)
         theta_unshifted_vals.append(theta_unshifted)
@@ -64,7 +75,7 @@ def generate_dataset():
             t_val, y_shifted, _f_0, _tau, shift = get_sg_data(
                 f_0=f_0, tau=tau,  # f_0 and tau same as above
                 shift=None,
-                num_points=num_points
+                _num_points=num_points
             )
             theta_shifted.append(torch.tensor([f_0, tau, shift]))
             data_shifted.append(y_shifted)

@@ -3,9 +3,15 @@ import numpy as np
 import scipy.stats
 import torch
 from torch.utils.data import Dataset
+import random
+
+SEED = 42
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+random.seed(SEED)
 
 # path = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
-savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO'
+savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO'
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
@@ -28,6 +34,15 @@ def damped_sho(t, omega_0, beta, shift=0):
     osc = torch.sqrt(1 - beta**2) * omega_0
     tau = t - shift
     data = torch.exp(-envel * tau) * torch.cos(osc * tau)
+    data[tau < 0] = 0  # assume oscillator starts at tau = 0
+    return data
+
+def damped_sho_np(t, omega_0, beta, shift=0):
+    # beta less than 1 for underdamped
+    envel = beta * omega_0
+    osc = np.sqrt(1 - beta**2) * omega_0
+    tau = t - shift
+    data = np.exp(-envel * tau) * np.cos(osc * tau)
     data[tau < 0] = 0  # assume oscillator starts at tau = 0
     return data
 
