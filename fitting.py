@@ -92,7 +92,7 @@ class Fitting:
         desc = result.posterior.describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95])
         stats_df = desc.loc[['count', 'mean', 'std', '5%', '25%', '50%', '75%', '95%']]
         stats_df['stat'] = stats_df.index
-        stats_df['event_id'] = event_id
+        stats_df['event_id'] = int(event_id)
         result.plot_corner()
         # append truth info
         truth_row = {'stat': 'truth', 'event_id': event_id}
@@ -103,7 +103,7 @@ class Fitting:
             truth_row['f_0'] = truth[0]
             truth_row['tau'] = truth[1]
         stats_df = pd.concat([stats_df, pd.DataFrame([truth_row]).set_index('event_id')])
-        stats_df['event_id'] = stats_df['event_id'].astype(int)
+        stats_df['event_id'] = stats_df['event_id']
         return stats_df.set_index('event_id', append=False)
 
     def run_lmfit(self, max_events=None, max_workers=4):
