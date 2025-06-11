@@ -1,10 +1,11 @@
 import logging
 import os
 
+import numpy as np
+import pandas as pd
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import Subset, DataLoader
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('fitting')
 
 class Fitting:
@@ -72,10 +73,11 @@ class Fitting:
         self.test_dict = torch.load(os.path.join(self.modeldir, kwargs.get('testfile', 'test.pt')),
                                     map_location=self.device)
         self.start_idx = 0 if batch_indices[0] is None else batch_indices[0]
-        self.end_idx = batch_indices[1]
+        self.end_idx = self.test_dict['data_unshifted'].shape[0] if batch_indices[1] is None else batch_indices[1]
         self.test_data = DataGenerator(self.test_dict)
+        self.test_data_subset = Subset(self.test_data, list(range(self.start_idx, self.end_idx)))
         self.test_dataloader = DataLoader(
-            self.test_data[self.start_idx, self.end_idx],
+            self.test_data_subset,
             batch_size=1,
             shuffle=False
         )
@@ -83,16 +85,25 @@ class Fitting:
         self.num_points = kwargs.get('num_points', 200)
         self.n_repeats = kwargs.get('n_repeats', 10)
         self.sigma = kwargs.get('sigma', 0.4)
-        self.savedir = kwargs.get('savedir', './results')  # Default directory for saving results
 
-        self.t_vals_np = torch.linspace(start=-1, end=10, steps=self.num_points)
+        self.t_vals_np = np.linspace(start=-1, stop=10, num=self.num_points)
 
-    def summarize_bilby_event(result, event_id):
+    def summarize_bilby_event(self, result, truth, event_id):
         desc = result.posterior.describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95])
         stats_df = desc.loc[['count', 'mean', 'std', '5%', '25%', '50%', '75%', '95%']]
         stats_df['stat'] = stats_df.index
-        stats_df = stats_df.index
         stats_df['event_id'] = event_id
+        result.plot_corner()
+        # append truth info
+        truth_row = {'stat': 'truth', 'event_id': event_id}
+        if self.datatype=='SHO':
+            truth_row['omega_0'] = truth[0]
+            truth_row['beta'] = truth[1]
+        elif self.datatype=='SineGaussian':
+            truth_row['f_0'] = truth[0]
+            truth_row['tau'] = truth[1]
+        stats_df = pd.concat([stats_df, pd.DataFrame([truth_row]).set_index('event_id')])
+        stats_df['event_id'] = stats_df['event_id'].astype(int)
         return stats_df.set_index('event_id', append=False)
 
     def run_lmfit(self, max_events=None, max_workers=4):
@@ -100,13 +111,13 @@ class Fitting:
         model = Model(self.func)
         params = Parameters()
         params.add('shift', value=1.0, vary=False) # Default shift value
-        if self.datatype == 'SHO':
+        if self.datatype=='SHO':
             params.add('omega_0', min=0.1, max=1.9)
             params.add('beta', min=0., max=0.5)
-        elif self.datatype == 'SineGaussian':
+        elif self.datatype=='SineGaussian':
             params.add('f_0', min=0.1, max=1.9)
             params.add('tau', min=1., max=4.)
-        elif self.datatype == 'LIGO':
+        elif self.datatype=='LIGO':
             pass # TODO: Implement LIGO model parameter hints
 
         def fit_one(args):
@@ -129,10 +140,10 @@ class Fitting:
     
     def run_bilby(self, nlive=1000, sampler='dynesty', max_workers=4):
         import bilby
-        import itertools
         from bilby.core.prior import Uniform
         from bilby.core.likelihood import GaussianLikelihood
         priors = {}
+        summaries = [] # Container for the event summary dataframes
         if self.datatype=='SHO':
             priors['omega_0'] = Uniform(0.1, 1.9, name='omega_0', latex_label=r'$\omega_0$')
             priors['beta'] = Uniform(0, 0.5, name='beta', latex_label=r'$\beta$')
@@ -144,6 +155,8 @@ class Fitting:
         for idx, batch in enumerate(self.test_dataloader):
             theta_u, theta_s, data_u, data_s = batch
             event_id = idx + self.start_idx
+            truth = theta_u[0][0].to(device='cpu')
+            truth_np = truth.numpy()
             y = data_u[0][0].to(device='cpu')
             y_np = y.numpy()
             log_l = GaussianLikelihood(x=self.t_vals_np, y=y_np, func=self.func,
@@ -152,8 +165,11 @@ class Fitting:
                 likelihood=log_l, priors=priors, sampler=sampler,
                 nlive=nlive, npool=max_workers,
                 injection_parameters=injection_parameters,
-                outdir=self.savedir,
+                outdir=os.path.join(self.savedir, 'bilby', f'{self.datatype}_id{event_id:05d}'),
                 label=f'{self.datatype}_id{event_id:05d}'
             )
-            stats_df = self.summarize_bilby_event(result, event_id)
+            stats_df = self.summarize_bilby_event(result, truth_np, event_id)
             logger.info(stats_df.head())
+            summaries.append(stats_df)
+        summary_df = pd.concat(summaries)
+        summary_df.to_parquet(os.path.join(self.savedir, 'bilby', f'{self.datatype}_bilby_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))

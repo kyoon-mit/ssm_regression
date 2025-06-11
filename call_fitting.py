@@ -26,6 +26,8 @@ def parse_args():
 
 def configure_logging(logfile, loglevel):
     logger = logging.getLogger('fitting')
+    # Remove all existing handlers
+    logger.handlers.clear()
     match loglevel:
         case 'notset':
             logger.setLevel(logging.NOTSET)
@@ -40,7 +42,7 @@ def configure_logging(logfile, loglevel):
         case 'critical':
             logger.setLevel(logging.CRITICAL)
     if logfile:
-        file_handler = logging.FileHandler(logfile)
+        file_handler = logging.FileHandler(logfile, 'w+')
         file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
         logger.addHandler(file_handler)
     stream_handler = logging.StreamHandler()
