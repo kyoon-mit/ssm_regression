@@ -20,9 +20,15 @@ class SSMRegression():
         n_layers=4,
         dropout=0.0,
         prenorm=False,
+        device=None,
         datatype='SineGaussian', # 'SineGaussian', 'SHO', or 'LIGO'
         loss='NLLGaussian', # 'NLLGaussian', 'Quantile'
     ):
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = torch.device(device)
+
         self.d_input = d_input # number of channels (here only one time series -> 1)
         self.d_output = d_output # number of outputs (here regression, so one output, can be several, if we want to regress several quantities)
         self.d_model = d_model
@@ -32,8 +38,8 @@ class SSMRegression():
         self.datatype = datatype
         self.loss = loss
 
-        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/{self.datatype}'
-        self.modeldir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/{self.datatype}/models'
+        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
+        self.modeldir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}/output'
 
         # Load datasets
         if datatype=='SineGaussian':
@@ -43,8 +49,8 @@ class SSMRegression():
         elif datatype=='LIGO':
             pass # TODO: implement LIGO data loading
 
-        self.train_dict = torch.load(os.path.join(self.datadir, 'train.pt'))
-        self.val_dict = torch.load(os.path.join(self.datadir, 'val.pt'))
+        self.train_dict = torch.load(os.path.join(self.datadir, 'train.pt'), map_location=self.device)
+        self.val_dict = torch.load(os.path.join(self.datadir, 'val.pt'), map_location=self.device)
 
         self.train_data = DataGenerator(self.train_dict)
         self.val_data = DataGenerator(self.val_dict)
@@ -61,7 +67,6 @@ class SSMRegression():
             shuffle=True
         )
 
-        self.device = None
         self.model = None
 
         self.optimizer, self.scheduler = None, None
@@ -89,8 +94,7 @@ class SSMRegression():
         """
         print('==> Building model..')
         # Define the model
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.model = S4Model(d_input=self.d_input, d_output=self.d_output, d_model=self.d_model,
+        self.model = S4Model(d_input=self.d_input, loss=self.loss, d_model=self.d_model,
                         n_layers=self.n_layers, dropout=self.dropout, prenorm=self.prenorm)
         self.model = self.model.to(self.device)
         print('...done!')
@@ -142,7 +146,7 @@ class SSMRegression():
         if self.loss == 'NLLGaussian':
             return {
                 'mean': outputs[:,:2], # mean predictions on the two parameters
-                'sigma': torch.exp(outputs[:,2:4]).clamp(min=1e-7), # uncertainties on the two parameters (model outputs log values)
+                'sigma': outputs[:,2:4], # uncertainties on the two parameters
             }
         elif self.loss=='Quantile':
             return {
@@ -237,17 +241,17 @@ class SSMRegression():
 
 if __name__=='__main__':
 
-    task = SSMRegression(d_output=4, datatype='SHO', loss='NLLGaussian')
+    task = SSMRegression(d_output=4, datatype='SineGaussian', loss='NLLGaussian')
     task.build_model()
     task.setup_optimizer(lr=0.001, weight_decay=0.01)
 
     timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
-    wandb.init(project='ssm_uncertainty_sho_regression', name=f'{timestamp}_regression.py')
+    wandb.init(project='ssm_sho_regression', name=f'{timestamp}_regression.py')
 
     print('Start training...')
 
-    EPOCHS = 200
+    EPOCHS = 240
 
     pbar = tqdm(range(task.start_epoch, EPOCHS))
     for epoch_number in pbar:

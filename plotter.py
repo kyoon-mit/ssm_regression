@@ -19,7 +19,7 @@ print(torch.cuda.is_available())
 class Plotter:
     def __init__(
         self,
-        save_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/plots',
+        save_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/plots',
         datatype='SineGaussian', # 'SineGaussian', 'SHO', or 'LIGO'
     ):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -35,14 +35,14 @@ class Plotter:
         else:
             raise ValueError(f'Unknown datatype: {datatype}')
         self.datatype = datatype
-        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/{datatype}'
-        self.train_dict = torch.load(os.path.join(self.datadir, 'train.pt'), map_location=torch.device(self.device))
+        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{datatype}'
+        self.train_dict = torch.load(os.path.join(self.datadir, 'train.pt'), map_location=torch.device(self.device), weights_only=True)
         self.train_data = DataGenerator(self.train_dict)
 
-        self.val_dict   = torch.load(os.path.join(self.datadir, 'val.pt'), map_location=torch.device(self.device))
+        self.val_dict   = torch.load(os.path.join(self.datadir, 'val.pt'), map_location=torch.device(self.device), weights_only=True)
         self.val_data   = DataGenerator(self.val_dict)
 
-        self.test_dict  = torch.load(os.path.join(self.datadir, 'test.pt'), map_location=torch.device(self.device))
+        self.test_dict  = torch.load(os.path.join(self.datadir, 'test.pt'), map_location=torch.device(self.device), weights_only=True)
         self.test_data  = DataGenerator(self.test_dict)
 
         self.test_data_loader = DataLoader(
@@ -415,7 +415,7 @@ class Plotter:
             raise ValueError(f'Unknown loss function: {loss}')
         if not model_path or not os.path.exists(model_path):
             raise ValueError(f"Model path '{model_path}' does not exist or was not provided.")
-        self.ssm_model = S4Model(d_input=d_input, loss_type=loss, d_model=d_model, n_layers=n_layers, dropout=0.0, prenorm=False)
+        self.ssm_model = S4Model(d_input=d_input, loss=loss, d_model=d_model, n_layers=n_layers, dropout=0.0, prenorm=False)
         self.ssm_model = self.ssm_model.to(self.device)
         self.ssm_model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
         self.ssm_model.eval()
@@ -520,11 +520,11 @@ class Plotter:
         return
 
 if __name__ == "__main__":
-    # plotter = Plotter(datatype='SHO')
+    plotter = Plotter(datatype='SHO')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path',
     #                         num_hidden_layers_h=2)
-    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.NLLGaussian.250530144002.path',
-    #                              save_prefix='ssm', loss='NLLGaussian')
+    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250611195623.path',
+                                 save_prefix='ssm', loss='NLLGaussian')
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.Quantile.20250528-013120.path',
     #                              save_prefix='ssm', loss='Quantile')
 

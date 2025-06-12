@@ -68,3 +68,14 @@ class VICRegLoss(nn.Module):
         assert n == m
         # All off diagonal elements from complete batch flattened
         return x.flatten(start_dim=1)[...,:-1].view(num_batch, n - 1, n + 1)[...,1:].flatten()
+
+class QuantileLoss(nn.Module):
+    def __init__(self, quantile=0.25):
+        super().__init__
+        self.quantile = quantile
+
+    def forward(self, pred, target):
+        z = target - pred
+        loss = torch.where(z > 0, self.quantile * z, (self.quantile - 1) * z)
+        return loss.mean()
+

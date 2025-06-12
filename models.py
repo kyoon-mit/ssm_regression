@@ -128,7 +128,7 @@ class S4Model(nn.Module):
     def __init__(
         self,
         d_input,
-        d_output=10,
+        loss:str,
         d_model=256,
         n_layers=4,
         dropout=0.2,
@@ -148,6 +148,10 @@ class S4Model(nn.Module):
             )
             self.norms.append(nn.LayerNorm(d_model))
             self.dropouts.append(dropout_fn(dropout))
+        if loss=='NLLGaussian': d_output=4
+        elif loss=='Quantile': d_output=6
+        else: raise ValueError(f'Unrecognized {loss=}.')
+        self.loss=loss
         # Linear decoder
         self.decoder = nn.Linear(d_model, d_output)
 
@@ -177,4 +181,7 @@ class S4Model(nn.Module):
         x = x.mean(dim=1)
         # Decode the outputs
         x = self.decoder(x)  # (B, d_model) -> (B, d_output)
+        if self.loss=='NLLGaussian':
+            x_uncertainties = F.softplus(x[..., 2:4])
+            x = torch.cat([x[..., 0:2], x_uncertainties], dim=-1)
         return x
