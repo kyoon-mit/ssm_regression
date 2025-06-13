@@ -92,7 +92,7 @@ class Fitting:
         desc = result.posterior.describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95])
         stats_df = desc.loc[['count', 'mean', 'std', '5%', '25%', '50%', '75%', '95%']]
         stats_df['stat'] = stats_df.index
-        stats_df['event_id'] = int(event_id)
+        stats_df['event_id'] = event_id
         result.plot_corner()
         # append truth info
         truth_row = {'stat': 'truth', 'event_id': event_id}
