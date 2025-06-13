@@ -503,7 +503,7 @@ class Plotter:
 
         # Save the figures
         if self.save_path is not None:
-            figure_diffs.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}{timestamp}_diffs.png'), bbox_inches='tight')
+            figure_diffs.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_diffs.png'), bbox_inches='tight')
             figure_uncertainties.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_uncertainties.png'), bbox_inches='tight')
             figure_z_scores.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_z_scores.png'), bbox_inches='tight')
         else:
@@ -519,20 +519,48 @@ class Plotter:
 
         return
 
+    def plot_bilby(self, bilby_dir='/ceph/submit/data/user/k/kyoon/KYoonStudy/fitresults'):
+        """
+        Placeholder for bilby plotting function.
+        This function should be implemented to plot bilby results.
+        """
+        import pandas as pd
+        import glob
+        if self.datatype=='SHO':
+            bilby_dir = os.path.join(bilby_dir, 'bilby_sho')
+        elif self.datatype=='SineGaussian':
+            bilby_dir = os.path.join(bilby_dir, 'bilby_sg')
+        bilby_parquet = sorted(glob.glob(os.path.join(bilby_dir, f'{self.datatype}_bilby_id*.parquet')))
+        if not bilby_parquet:
+            raise FileNotFoundError(f'No bilby parquet files found in {bilby_dir} for datatype {self.datatype}')
+        dfs = []
+        for f in bilby_parquet:
+            _df = pd.read_parquet(f)
+            print(f'Loaded {f} with shape {_df.shape}')
+            _df = _df.reset_index()
+            _df['event_id'] = _df['event_id'].ffill()
+            _df = _df.set_index('event_id')
+            dfs.append(_df)
+        combined_df = pd.concat(dfs, axis=0, ignore_index=False)
+        print(f'Combined {len(bilby_parquet)} parquet files into a dataframe with shape {combined_df.shape}')
+        combined_df.to_parquet(os.path.join(bilby_dir, f'{self.datatype}_bilby_combined.parquet'))
+
 if __name__ == "__main__":
     plotter = Plotter(datatype='SHO')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path',
     #                         num_hidden_layers_h=2)
-    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250611195623.path',
-                                 save_prefix='ssm', loss='NLLGaussian')
+    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250612122840.path',
+    #                              save_prefix='ssm', loss='NLLGaussian')
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.Quantile.20250528-013120.path',
     #                              save_prefix='ssm', loss='Quantile')
+    plotter.plot_bilby()
 
     plotter = Plotter(datatype='SineGaussian')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path',
     #                         num_hidden_layers_h=2)
-    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.NLLGaussian.250602141754.path',
-                                 save_prefix='ssm', loss='NLLGaussian', csv_output=True)
+    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250612122926.path',
+    #                              save_prefix='ssm', loss='NLLGaussian', csv_output=True)
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.Quantile.20250528-005641.path',
     #                              save_prefix='ssm', loss='Quantile')
+    plotter.plot_bilby()
     # Replace '/path/to/your/model.pth' with the actual path to your trained model
