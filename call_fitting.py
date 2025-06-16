@@ -55,10 +55,18 @@ def run_bilby(datatype, device, batch_indices):
     fitter.run_bilby()
     return
 
+def run_lmfit(datatype, device, batch_indices):
+    fitter = Fitting(datatype=datatype, device=device, batch_indices=batch_indices)
+    fitter.run_lmfit()
+    return
+
 def main():
     args = parse_args()
     configure_logging(logfile=args.logfile, loglevel=args.loglevel)
-    run_bilby(datatype=args.datatype, device=args.device, batch_indices=tuple(args.batch_indices))
+    if args.jobtype == 'lmfit':
+        run_lmfit(datatype=args.datatype, device=args.device, batch_indices=tuple(args.batch_indices))
+    elif args.jobtype == 'bilby':
+        run_bilby(datatype=args.datatype, device=args.device, batch_indices=tuple(args.batch_indices))
 
 if __name__=='__main__':
     main()

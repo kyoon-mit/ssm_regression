@@ -71,7 +71,7 @@ class Fitting:
         self.modeldir = kwargs.get('modeldir', os.path.join(self.basedir, 'models', self.datatype))
         self.savedir = kwargs.get('savedir', os.path.join(self.basedir, 'fitresults'))
         self.test_dict = torch.load(os.path.join(self.modeldir, kwargs.get('testfile', 'test.pt')),
-                                    map_location=self.device)
+                                    map_location=self.device, weights_only=True)
         self.start_idx = 0 if batch_indices[0] is None else batch_indices[0]
         self.end_idx = self.test_dict['data_unshifted'].shape[0] if batch_indices[1] is None else batch_indices[1]
         self.test_data = DataGenerator(self.test_dict)
@@ -102,8 +102,50 @@ class Fitting:
         elif self.datatype=='SineGaussian':
             truth_row['f_0'] = truth[0]
             truth_row['tau'] = truth[1]
-        stats_df = pd.concat([stats_df, pd.DataFrame([truth_row]).set_index('event_id')])
-        stats_df['event_id'] = stats_df['event_id']
+        stats_df = pd.concat([stats_df, pd.DataFrame([truth_row])])
+        return stats_df.set_index('event_id', append=False)
+
+    def summarize_lmfit_event(self, result, truth, event_id):
+        """
+        Summarize the results of an lmfit fit for a single event.
+        Parameters
+        ----------
+        result : lmfit.model.ModelResult
+            The result object from lmfit.
+        truth : np.ndarray
+            The ground truth parameters for the event.
+        event_id : int
+            The ID of the event being summarized.
+        Returns
+        -------
+        pd.DataFrame
+            A DataFrame summarizing the fit results and truth values.
+        """
+        summary = {}
+        result_dict = result.summary()
+        var_names = result_dict['var_names']
+        params = result_dict['params']
+        for vn in var_names:
+            # params is a list of tuples, so we need to search for the tuple with name == vn
+            row = {}
+            param_tuple = next((p for p in params if p[0] == vn), None)
+            if param_tuple is not None:
+                row['mean'] = param_tuple[1]
+                row['std']  = param_tuple[7]
+                summary[vn] = row
+        # Convert summary to DataFrame
+        stats_df = pd.DataFrame(summary)
+        stats_df['stat'] = stats_df.index
+        stats_df['event_id'] = event_id
+        # append truth info
+        truth_row = {'stat': 'truth', 'event_id': event_id}
+        if self.datatype=='SHO':
+            truth_row['omega_0'] = truth[0]
+            truth_row['beta'] = truth[1]
+        elif self.datatype=='SineGaussian':
+            truth_row['f_0'] = truth[0]
+            truth_row['tau'] = truth[1]
+        stats_df = pd.concat([stats_df, pd.DataFrame([truth_row])])
         return stats_df.set_index('event_id', append=False)
 
     def run_lmfit(self, max_events=None, max_workers=4):
@@ -112,31 +154,28 @@ class Fitting:
         params = Parameters()
         params.add('shift', value=1.0, vary=False) # Default shift value
         if self.datatype=='SHO':
-            params.add('omega_0', min=0.1, max=1.9)
+            params.add('omega_0', min=0.1, max=2.0)
             params.add('beta', min=0., max=0.5)
         elif self.datatype=='SineGaussian':
-            params.add('f_0', min=0.1, max=1.9)
-            params.add('tau', min=1., max=4.)
+            params.add('f_0', min=0.1, max=1.1)
+            params.add('tau', min=1., max=5.)
         elif self.datatype=='LIGO':
             pass # TODO: Implement LIGO model parameter hints
-
-        def fit_one(args):
-            idx, (theta_u, theta_s, data_u, data_s) = args
+        
+        summaries = [] # Container for the event summary dataframes
+        for idx, batch in enumerate(self.test_dataloader):
+            theta_u, theta_s, data_u, data_s = batch
+            event_id = idx + self.start_idx
+            truth = theta_u[0][0].to(device='cpu')
+            truth_np = truth.numpy()
             y = data_u[0][0].to(device='cpu')
             y_np = y.numpy()
             result = model.fit(y_np, params, t=self.t_vals_np)
-            return idx, result.fit_report()
-
-        # Prepare data iterator (limit events if max_events is set)
-        data_iter = enumerate(self.test_dataloader)
-        if max_events is not None:
-            data_iter = itertools.islice(data_iter, max_events)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(fit_one, args) for args in data_iter]
-            for future in concurrent.futures.as_completed(futures):
-                idx, report = future.result()
-                logger.info(f'Fit result for event {idx}: {report}')
+            stats_df = self.summarize_lmfit_event(result, truth_np, event_id)
+            logger.info(stats_df.head())
+            summaries.append(stats_df)
+        summary_df = pd.concat(summaries)
+        summary_df.to_parquet(os.path.join(self.savedir, f'lmfit_{"sho" if self.datatype=="SHO" else "sg"}', f'{self.datatype}_lmfit_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
     
     def run_bilby(self, nlive=1000, sampler='dynesty', max_workers=4):
         import bilby
