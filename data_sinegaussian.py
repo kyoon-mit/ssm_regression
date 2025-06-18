@@ -11,15 +11,16 @@ torch.manual_seed(SEED)
 random.seed(SEED)
 
 # path = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
-savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian'
+# savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian'
+savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/tmp'
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 priors = dict()
-priors['f_0'] = scipy.stats.uniform(0.1, 1)
-priors['tau'] = scipy.stats.uniform(1, 4)
-priors['shift'] = scipy.stats.uniform(-2, 2)
+priors['f_0'] = scipy.stats.uniform(loc=0.1, scale=1)
+priors['tau'] = scipy.stats.uniform(loc=1, scale=4)
+priors['shift'] = scipy.stats.uniform(loc=-2, scale=2)
 
 num_simulations = 100000 # number of time series to be generated
 num_repeats = 10 # number of augmentations
@@ -44,6 +45,7 @@ def get_sg_data(f_0=None, tau=None, shift=None, _num_points=num_points, _sigma=s
     f_0 = torch.tensor(f_0).to(dtype=torch.float32)
     tau = priors['tau'].rvs() if tau is None else tau
     tau = torch.tensor(tau).to(dtype=torch.float32)
+    print(f'{tau=}')
     shift = priors['shift'].rvs() if shift is None else shift
     shift = torch.tensor(shift).to(dtype=torch.float32)
     

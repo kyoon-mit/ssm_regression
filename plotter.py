@@ -543,7 +543,9 @@ class Plotter:
             dfs.append(_df)
         combined_df = pd.concat(dfs, axis=0, ignore_index=False)
         print(f'Combined {len(bilby_parquet)} parquet files into a dataframe with shape {combined_df.shape}')
-        combined_df.to_parquet(os.path.join(bilby_dir, f'{self.datatype}_bilby_combined.parquet'))
+        parquet_name = os.path.join(bilby_dir, f'{self.datatype}_bilby_combined.parquet')
+        combined_df.to_parquet(parquet_name)
+        print(f'Saved combined dataframe to {parquet_name}')
 
 if __name__ == "__main__":
     plotter = Plotter(datatype='SHO')

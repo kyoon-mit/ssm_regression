@@ -57,10 +57,13 @@ class Fitting:
         if self.datatype=='SHO':
             from data_sho import damped_sho_np as func
             from data_sho import DataGenerator
+            self.tag = 'sho'
         elif self.datatype=='SineGaussian':
             from data_sinegaussian import sine_gaussian_np as func
             from data_sinegaussian import DataGenerator
+            self.tag = 'sg'
         elif self.datatype=='LIGO':
+            self.tag = 'ligo'
             pass #TODO
         else:
             msg = f'Unknown datatype: {self.datatype}'
@@ -73,7 +76,7 @@ class Fitting:
         self.test_dict = torch.load(os.path.join(self.modeldir, kwargs.get('testfile', 'test.pt')),
                                     map_location=self.device, weights_only=True)
         self.start_idx = 0 if batch_indices[0] is None else batch_indices[0]
-        self.end_idx = self.test_dict['data_unshifted'].shape[0] if batch_indices[1] is None else batch_indices[1]
+        self.end_idx = int(self.test_dict['data_unshifted'].shape[0]-1) if batch_indices[1] is None else batch_indices[1]
         self.test_data = DataGenerator(self.test_dict)
         self.test_data_subset = Subset(self.test_data, list(range(self.start_idx, self.end_idx)))
         self.test_dataloader = DataLoader(
@@ -175,8 +178,8 @@ class Fitting:
             logger.info(stats_df.head())
             summaries.append(stats_df)
         summary_df = pd.concat(summaries)
-        summary_df.to_parquet(os.path.join(self.savedir, f'lmfit_{"sho" if self.datatype=="SHO" else "sg"}', f'{self.datatype}_lmfit_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
-    
+        summary_df.to_parquet(os.path.join(self.savedir, f'lmfit_{self.tag}', f'{self.datatype}_lmfit_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
+
     def run_bilby(self, nlive=1000, sampler='dynesty', max_workers=4):
         import bilby
         from bilby.core.prior import Uniform
@@ -188,9 +191,9 @@ class Fitting:
             priors['beta'] = Uniform(0, 0.5, name='beta', latex_label=r'$\beta$')
             injection_parameters = dict(omega_0=1., beta=0.3)
         elif self.datatype=='SineGaussian':
-            priors['f_0'] = Uniform(0.1, 1.9, name='f_0', latex_label=r'$f_0$')
-            priors['tau'] = Uniform(1., 4., name='tau', latex_label=r'$\tau$')
-            injection_parameters = dict(f_0=1., tau=2.5)
+            priors['f_0'] = Uniform(0.1, 1.1, name='f_0', latex_label=r'$f_0$')
+            priors['tau'] = Uniform(1., 5., name='tau', latex_label=r'$\tau$')
+            injection_parameters = dict(f_0=0.6, tau=2.5)
         for idx, batch in enumerate(self.test_dataloader):
             theta_u, theta_s, data_u, data_s = batch
             event_id = idx + self.start_idx
@@ -204,11 +207,11 @@ class Fitting:
                 likelihood=log_l, priors=priors, sampler=sampler,
                 nlive=nlive, npool=max_workers,
                 injection_parameters=injection_parameters,
-                outdir=os.path.join(self.savedir, 'bilby', f'{self.datatype}_id{event_id:05d}'),
+                outdir=os.path.join(self.savedir, f'bilby_{self.tag}', f'{self.datatype}_id{event_id:05d}'),
                 label=f'{self.datatype}_id{event_id:05d}'
             )
             stats_df = self.summarize_bilby_event(result, truth_np, event_id)
             logger.info(stats_df.head())
             summaries.append(stats_df)
         summary_df = pd.concat(summaries)
-        summary_df.to_parquet(os.path.join(self.savedir, 'bilby', f'{self.datatype}_bilby_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
+        summary_df.to_parquet(os.path.join(self.savedir, f'bilby_{self.tag}', f'{self.datatype}_bilby_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))

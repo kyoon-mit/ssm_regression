@@ -8,21 +8,24 @@ from datetime import datetime
 
 timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
-wandb.init(project='ssm_sg_regression', name=f'{timestamp}_embedding.py')
+datatype = 'SineGaussian'
+
+os.environ['WANDB_MODE'] = 'offline'
+wandb.init(project=f'embedding_{datatype}', name=f'embedding_{datatype}_{timestamp}')
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 # datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
 # modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/models/'
-datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian'
-modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models'
+datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{datatype}'
+modeldir = os.path.join(datadir, 'output')
 
 # Load datasets
 from data_sinegaussian import DataGenerator
 
-train_dict = torch.load(os.path.join(datadir, 'train.pt'))
-val_dict = torch.load(os.path.join(datadir, 'val.pt'))
+train_dict = torch.load(os.path.join(datadir, 'train.pt'), map_location=device, weights_only=True)
+val_dict = torch.load(os.path.join(datadir, 'val.pt'), map_location=device, weights_only=True)
 
 train_data = DataGenerator(train_dict)
 val_data = DataGenerator(val_dict)
@@ -128,7 +131,7 @@ if __name__=='__main__':
 
     print('Start training...')
 
-    EPOCHS = 200
+    EPOCHS = 220
 
     for epoch_number in range(EPOCHS):
         print('EPOCH {}:'.format(epoch_number + 1))
@@ -143,17 +146,21 @@ if __name__=='__main__':
         # Gradient tracking
         similarity_embedding.train(True)
         avg_train_loss = train_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
-        
+
         # no gradient tracking, for validation
         similarity_embedding.train(False)
         avg_val_loss = val_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
-        
+
         print(f"Train/Val Sim Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
 
         wandb.log({
             'epoch': epoch_number,
             'train_loss': avg_train_loss,
             'val_accuracy': avg_val_loss,
+            'lr': optimizer.param_groups[0]['lr'],
+            'wt_repr': wt_repr,
+            'wt_cov': wt_cov,
+            'wt_std': wt_std
         })
 
         epoch_number += 1
@@ -164,4 +171,4 @@ if __name__=='__main__':
 
     wandb.finish()
 
-    torch.save(similarity_embedding.state_dict(), os.path.join(modeldir, f'model.CNN.{timestamp}.path'))
+    torch.save(similarity_embedding.state_dict(), os.path.join(modeldir, f'model.CNN.{datatype}.{timestamp}.path'))

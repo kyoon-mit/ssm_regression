@@ -17,9 +17,10 @@ from models import SimilarityEmbedding
 # datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SineGaussian/'
 # pretraining = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SineGaussian/models/model.CNN.20250408-111215.path'
 # modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SineGaussian/models/'
-datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian'
-modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models'
-pretraining = '/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.CNN.SineGaussian.20250527-232830.path'
+datatype = 'SHO'  # 'SHO', 'SineGaussian', 'LIGO'
+datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{datatype}'
+modeldir = os.path.join(datadir, 'output')
+pretraining = os.path.join(modeldir, f'model.CNN.{datatype}.250612151014.path')
 
 num_transforms = 5
 num_blocks = 4
@@ -30,16 +31,24 @@ num_repeats = 10 # number of augmentations
 
 timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
-wandb.init(project='ssm_sg_regression', name=f'{timestamp}_parameter_estimation.py')
+wandb.init(project=f'flow_{datatype}', name=f'flow_{datatype}_{timestamp}')
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 # Load datasets
-from data_sinegaussian import DataGenerator
+if datatype == 'SHO':
+    from data_sho import DataGenerator
+elif datatype == 'SineGaussian':
+    from data_sinegaussian import DataGenerator
+elif datatype == 'LIGO':
+    raise NotImplementedError("LIGO dataset is not implemented yet.")
+    # from data_ligo import DataGenerator
+else:
+    raise ValueError(f"Unknown datatype: {datatype}")
 
-train_dict = torch.load(os.path.join(datadir, 'train.pt'))
-val_dict = torch.load(os.path.join(datadir, 'val.pt'))
+train_dict = torch.load(os.path.join(datadir, 'train.pt'), map_location=device, weights_only=True)
+val_dict = torch.load(os.path.join(datadir, 'val.pt'), map_location=device, weights_only=True)
 
 train_data = DataGenerator(train_dict)
 val_data = DataGenerator(val_dict)
@@ -181,6 +190,10 @@ if __name__=='__main__':
             'epoch': epoch_number,
             'train_loss': avg_train_loss,
             'val_accuracy': avg_val_loss,
+            'lr': optimizer.param_groups[0]['lr'],
+            'trainable_params': sum(p.numel() for p in flow.parameters() if p.requires_grad),
+            'fixed_params': sum(p.numel() for p in flow._embedding_net.parameters() if not p.requires_grad),
+            'total_params': sum(p.numel() for p in flow.parameters())
         })
 
         for param_group in optimizer.param_groups:
@@ -193,4 +206,4 @@ if __name__=='__main__':
 
     wandb.finish()
 
-    torch.save(flow.state_dict(), os.path.join(modeldir, f'flow.CNN.{timestamp}.path'))
+    torch.save(flow.state_dict(), os.path.join(modeldir, f'flow.CNN.{datatype}.{timestamp}.path'))
