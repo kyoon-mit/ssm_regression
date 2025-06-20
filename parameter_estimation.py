@@ -12,162 +12,153 @@ import wandb
 from datetime import datetime
 
 import nflows.utils as torchutils
-from models import SimilarityEmbedding
+from models import EmbeddingNet
 
-# datadir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SineGaussian/'
-# pretraining = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SineGaussian/models/model.CNN.20250408-111215.path'
-# modeldir = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SineGaussian/models/'
-datatype = 'SHO'  # 'SHO', 'SineGaussian', 'LIGO'
-datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{datatype}'
-modeldir = os.path.join(datadir, 'output')
-pretraining = os.path.join(modeldir, f'model.CNN.{datatype}.250612151014.path')
+class NormalizingFlow():
+    def __init__(
+            self,
+            datatype='SHO',
+            embed_model='', # Path to the pretraining model
+            num_transforms=5,
+            num_blocks=4,
+            hidden_features=30,
+            context_features=3,  # needs to fit the pretraining embedding dimensionality
+            num_points=200,  # length of time series
+            num_repeats=10,  # number of augmentations
+            device=None,
+        ):
+        # Load datasets
+        if datatype=='SineGaussian':
+            from data_sinegaussian import DataGenerator
+        elif datatype=='SHO':
+            from data_sho import DataGenerator
+        elif datatype=='LIGO':
+            pass # TODO: implement LIGO data loading
 
-num_transforms = 5
-num_blocks = 4
-hidden_features = 30
-context_features = 3 # needs to fit the pretraining embedding dimensionality
-num_points = 200 # length of time series
-num_repeats = 10 # number of augmentations
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = torch.device(device)
 
-timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+        self.datatype = datatype
+        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
+        self.modeldir = os.path.join(self.datadir, 'output')
+        if not embed_model:
+            raise ValueError("Pretraining path must be provided.")
+        self.pretraining = embed_model
 
-wandb.init(project=f'flow_{datatype}', name=f'flow_{datatype}_{timestamp}')
+        self.timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+        self.num_transforms = num_transforms
+        self.num_blocks = num_blocks
+        self.hidden_features = hidden_features
+        self.context_features = context_features
+        self.num_points = num_points
+        self.num_repeats = num_repeats
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using {device=}")
+        self.train_dict = torch.load(os.path.join(self.datadir, 'train.pt'),
+                                     map_location=self.device, weights_only=True)
+        self.val_dict = torch.load(os.path.join(self.datadir, 'val.pt'),
+                                     map_location=self.device, weights_only=True)
+        self.train_data = DataGenerator(self.train_dict)
+        self.val_data = DataGenerator(self.val_dict)
+        self.TRAIN_BATCH_SIZE = 1000
+        self.VAL_BATCH_SIZE = 1000
+        self.train_data_loader = DataLoader(
+            self.train_data, batch_size=self.TRAIN_BATCH_SIZE,
+            shuffle=True
+        )
+        self.val_data_loader = DataLoader(
+            self.val_data, batch_size=self.VAL_BATCH_SIZE,
+            shuffle=True
+        )
+        self.flow = nn.Module()
 
-# Load datasets
-if datatype == 'SHO':
-    from data_sho import DataGenerator
-elif datatype == 'SineGaussian':
-    from data_sinegaussian import DataGenerator
-elif datatype == 'LIGO':
-    raise NotImplementedError("LIGO dataset is not implemented yet.")
-    # from data_ligo import DataGenerator
-else:
-    raise ValueError(f"Unknown datatype: {datatype}")
+    def build_flow(self):
+        print('Building flow.')
+        # Define the base distribution
+        base_dist = StandardNormal([2])
+        transforms = []
+        for _ in range(self.num_transforms):
+            block = [
+                MaskedAffineAutoregressiveTransform(
+                    features=2,  # 2-dim posterior
+                    hidden_features=self.hidden_features,
+                    context_features=self.context_features,
+                    num_blocks=self.num_blocks,
+                    activation=torch.tanh,
+                    use_batch_norm=False,
+                    use_residual_blocks=True,
+                    dropout_probability=0.01,
+                ),
+                RandomPermutation(features=2)
+            ]
+            transforms += block
+        transform = CompositeTransform(transforms)
+        embedding_net = EmbeddingNet(self.pretraining, device=self.device)
+        self.flow = Flow(transform, base_dist, embedding_net).to(device=self.device)
+        # print number of parameters
+        print('Total number of NOT fixed weights in embedding net', sum(p.numel() for p in self.flow._embedding_net.parameters() if p.requires_grad))
+        print("Total number of trainable parameters: ", sum(p.numel() for p in self.flow.parameters() if p.requires_grad))
 
-train_dict = torch.load(os.path.join(datadir, 'train.pt'), map_location=device, weights_only=True)
-val_dict = torch.load(os.path.join(datadir, 'val.pt'), map_location=device, weights_only=True)
+    def train_one_epoch(self, epoch_index):
+        self.flow.train(True) # gradient tracking
+        running_loss = 0.
+        last_loss = 0.
 
-train_data = DataGenerator(train_dict)
-val_data = DataGenerator(val_dict)
+        for idx, val in enumerate(self.train_data_loader, 1):
+            augmented_theta, _, augmented_data, _ = val
+            augmented_theta = augmented_theta[...,0:2]
 
-TRAIN_BATCH_SIZE = 1000
-VAL_BATCH_SIZE = 1000
-train_data_loader = DataLoader(
-    train_data, batch_size=TRAIN_BATCH_SIZE,
-    shuffle=True
-)
+            theta = augmented_theta.reshape(-1, 2)
+            data = augmented_data.reshape(-1, 1, self.num_points)
 
-val_data_loader = DataLoader(
-    val_data, batch_size=VAL_BATCH_SIZE,
-    shuffle=True
-)
+            flow_loss = - self.flow.log_prob(theta, context=data).mean()
 
-# define model
-class EmbeddingNet(nn.Module):
-    """Wrapper around the similarity embedding defined above"""
-    def __init__(self, pretraining, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.representation_net = SimilarityEmbedding(num_hidden_layers_h=2)
-        self.representation_net.load_state_dict(torch.load(pretraining, map_location=device))
+            optimizer.zero_grad()
+            flow_loss.backward()
+            optimizer.step()
 
-        # the expander network is unused and hence don't track gradients
-        for name, param in self.representation_net.named_parameters():
-            if 'expander_layer' in name or 'layers_h' in name or 'final_layer' in name:
-                param.requires_grad = False
+            running_loss += flow_loss.item()
+            if idx % 10 == 0:
+                last_loss = running_loss / 10 # avg loss
+                print(' Avg. train loss/batch after {} batches = {:.4f}'.format(idx, last_loss))
+                tb_x = epoch_index * len(self.train_data_loader) + idx
+                running_loss = 0.
+        return last_loss
 
-        # freeze part of the conv layer of embedding_net
-        for name, param in self.representation_net.named_parameters():
-            if 'layers_f.blocks.0' in name or 'layers_f.blocks.1' in name:
-                param.requires_grad = False
+    def val_one_epoch(self, epoch_index):
+        self.flow.train(False) # no gradient tracking, for validation
+        running_loss = 0.
+        last_loss = 0.
 
-        self.context_layer = nn.Identity()
+        for idx, val in enumerate(self.val_data_loader, 1):
+            augmented_theta, _, augmented_data, _ = val
+            augmented_theta = augmented_theta[...,0:2]
 
-    def forward(self, x):
-        batch_size, _, dims = x.shape
-        x = x.reshape(batch_size, 1, dims).repeat(1, num_repeats, 1)
-        _, rep = self.representation_net(x)
-        return self.context_layer(rep.reshape(batch_size, context_features))
+            theta = augmented_theta.reshape(-1, 2)
+            data = augmented_data.reshape(-1, 1, self.num_points)
 
-base_dist = StandardNormal([2])
-transforms = []
-for _ in range(num_transforms):
-    block = [
-        MaskedAffineAutoregressiveTransform(
-            features=2,  # 2-dim posterior
-            hidden_features=hidden_features,
-            context_features=context_features,
-            num_blocks=num_blocks,
-            activation=torch.tanh,
-            use_batch_norm=False,
-            use_residual_blocks=True,
-            dropout_probability=0.01,
-        ),
-        RandomPermutation(features=2)
-    ]
-    transforms += block
+            flow_loss = - self.flow.log_prob(theta, context=data).mean()
+            loss = flow_loss.item()
 
-transform = CompositeTransform(transforms)
+            running_loss += flow_loss.item()
+            if idx % 5 == 0:
+                last_loss = running_loss / 5
+                tb_x = epoch_index * len(self.val_data_loader) + idx + 1
 
-embedding_net = EmbeddingNet(pretraining)
-
-flow = Flow(transform, base_dist, embedding_net).to(device=device)
-
-# print number of parameters
-print('Total number of NOT fixed weights in embedding net', sum(p.numel() for p in flow._embedding_net.parameters() if p.requires_grad))
-print("Total number of trainable parameters: ", sum(p.numel() for p in flow.parameters() if p.requires_grad))
-
-def train_one_epoch(epoch_index):
-    running_loss = 0.
-    last_loss = 0.
-
-    for idx, val in enumerate(train_data_loader, 1):
-        augmented_theta, _, augmented_data, _ = val
-        augmented_theta = augmented_theta[...,0:2]
-
-        theta = augmented_theta.reshape(-1, 2)
-        data = augmented_data.reshape(-1, 1, num_points)
-
-        flow_loss = -flow.log_prob(theta, context=data).mean()
-
-        optimizer.zero_grad()
-        flow_loss.backward()
-        optimizer.step()
-
-        running_loss += flow_loss.item()
-        if idx % 10 == 0:
-            last_loss = running_loss / 10 # avg loss
-            print(' Avg. train loss/batch after {} batches = {:.4f}'.format(idx, last_loss))
-            tb_x = epoch_index * len(train_data_loader) + idx
-            running_loss = 0.
-    return last_loss
-
-
-def val_one_epoch(epoch_index):
-    running_loss = 0.
-    last_loss = 0.
-
-    for idx, val in enumerate(val_data_loader, 1):
-        augmented_theta, _, augmented_data, _ = val
-        augmented_theta = augmented_theta[...,0:2]
-
-        theta = augmented_theta.reshape(-1, 2)
-        data = augmented_data.reshape(-1, 1, num_points)
-
-        flow_loss = -flow.log_prob(theta, context=data).mean()
-        loss = flow_loss.item()
-
-        running_loss += flow_loss.item()
-        if idx % 5 == 0:
-            last_loss = running_loss / 5
-            tb_x = epoch_index * len(val_data_loader) + idx + 1
-
-            running_loss = 0.
-    return last_loss
+                running_loss = 0.
+        return last_loss
 
 if __name__=='__main__':
+
+    embed_model = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.CNN.SHO.250612151014.path'
+    datatype = 'SHO'
+
+    task = NormalizingFlow(embed_model=embed_model, datatype=datatype)
+    task.build_flow()
+    flow = task.flow
+
+    wandb.init(project=f'flow_{task.datatype}', name=f'flow_{task.datatype}_{task.timestamp}')
 
     optimizer = optim.SGD(flow.parameters(), lr=1e-4, momentum=0.5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, threshold=0.01)
@@ -176,13 +167,8 @@ if __name__=='__main__':
 
     for epoch_number in range(EPOCHS):
         print(f'EPOCH {epoch_number + 1}')
-        # Gradient tracking
-        flow.train(True)
-        avg_train_loss = train_one_epoch(epoch_number)
-
-        # no gradient tracking, for validation
-        flow.train(False)
-        avg_val_loss = val_one_epoch(epoch_number)
+        avg_train_loss = task.train_one_epoch(epoch_number)
+        avg_val_loss = task.val_one_epoch(epoch_number)
 
         print(f"Train/Val flow Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
 
@@ -206,4 +192,4 @@ if __name__=='__main__':
 
     wandb.finish()
 
-    torch.save(flow.state_dict(), os.path.join(modeldir, f'flow.CNN.{datatype}.{timestamp}.path'))
+    torch.save(flow.state_dict(), os.path.join(task.modeldir, f'flow.CNN.{task.datatype}.{task.timestamp}.path'))
