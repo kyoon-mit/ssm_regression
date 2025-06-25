@@ -24,10 +24,10 @@ dependencies:
   - bzip2=1.0.8=h4bc722e_7
   - c-ares=1.33.0=ha66036c_0
   - c-blosc2=2.15.1=hc57e6cf_0
-  - ca-certificates=2025.4.26=hbd8a1cb_0
+  - ca-certificates=2025.6.15=hbd8a1cb_0
   - cached-property=1.5.2=hd8ed1ab_1
   - cached_property=1.5.2=pyha770c72_1
-  - certifi=2025.1.31=pyhd8ed1ab_0
+  - certifi=2025.6.15=pyhd8ed1ab_0
   - cffi=1.17.0=py310h2fdcea3_0
   - charset-normalizer=3.3.2=pyhd8ed1ab_0
   - colorama=0.4.6=pyhd8ed1ab_0
@@ -250,6 +250,7 @@ dependencies:
       - comm==0.2.2
       - datasets==3.0.0
       - debugpy==1.8.8
+      - decorator==5.2.1
       - dill==0.3.8
       - einops==0.8.0
       - exceptiongroup==1.2.2
@@ -304,10 +305,12 @@ dependencies:
       - platformdirs==4.3.3
       - prompt-toolkit==3.0.48
       - protobuf==5.28.1
+      - ptyprocess==0.7.0
       - pure-eval==0.2.3
       - pyarrow==17.0.0
       - pybind11==2.13.6
       - pydantic==2.11.3
+      - pydantic-core==2.33.1
       - pygments==2.18.0
       - pykeops==2.2.3
       - pytorch-lightning==2.0.4
@@ -343,5 +346,5 @@ dependencies:
       - xxhash==3.5.0
       - yarl==1.11.1
 variables:
-  LD_LIBRARY_PATH: /lib:/n/home04/kyoon/miniforge3/lib
-prefix: /n/home04/kyoon/miniforge3
+  LD_LIBRARY_PATH: /n/home04/kyoon/miniforge3/lib
+prefix: /n/home04/kyoon/miniforge3/envs/ssm
