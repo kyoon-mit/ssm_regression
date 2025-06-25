@@ -10,9 +10,8 @@
 
 # List of your scripts
 SCRIPTS=(
-sg_run_lmfit_id00000-09999.sh
-sho_run_lmfit_id00000-09999.sh
+/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sg_run_lmfit_id00000-09999.sh
+/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sho_run_lmfit_id00000-09999.sh
 )
 
-cd /ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm
 bash ${SCRIPTS[$SLURM_ARRAY_TASK_ID]}

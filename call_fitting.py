@@ -1,3 +1,4 @@
+import os
 import logging
 import argparse
 from fitting import Fitting
@@ -42,6 +43,7 @@ def configure_logging(logfile, loglevel):
         case 'critical':
             logger.setLevel(logging.CRITICAL)
     if logfile:
+        os.makedirs(os.path.dirname(logfile), exist_ok=True)  # Ensure directory exists
         file_handler = logging.FileHandler(logfile, 'w+')
         file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
         logger.addHandler(file_handler)

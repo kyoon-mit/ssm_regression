@@ -1,14 +1,18 @@
+import logging
 import os
+
 import torch
-from torch.utils.data import Dataset, DataLoader
-import torch.nn.functional as F
-from torch import nn, optim
+from torch.utils.data import DataLoader
+from torch import optim
 import wandb
 from datetime import datetime
+
+logger = logging.getLogger('embedding')
 
 class Embedding():
     def __init__(
         self,
+        batch_size=1000, # batch size for training and validation
         num_hidden_layers_h=2, # number of hidden layers in the embedding model
         device=None,
         datatype='SHO', # options: 'SineGaussian', 'SHO', 'LIGO'
@@ -27,7 +31,7 @@ class Embedding():
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         else:
             self.device = torch.device(device)
-        print(f"Using device={self.device}")
+        logger.info(f"Using device={self.device}")
         
         self.datatype = datatype
 
@@ -40,8 +44,8 @@ class Embedding():
         self.train_data = DataGenerator(self.train_dict)
         self.val_data = DataGenerator(self.val_dict)
 
-        self.TRAIN_BATCH_SIZE = 1000 
-        self.VAL_BATCH_SIZE = 1000
+        self.TRAIN_BATCH_SIZE = batch_size 
+        self.VAL_BATCH_SIZE = batch_size
 
         self.train_data_loader = DataLoader(
             self.train_data, batch_size=self.TRAIN_BATCH_SIZE,
@@ -58,7 +62,7 @@ class Embedding():
         self.optimizer, self.scheduler = None, None
 
     def build_model(self):
-        print('==> Building embedding model...')
+        logger.info('==> Building embedding model...')
         # Load loss and model
         from losses import VICRegLoss
         from models import SimilarityEmbedding
@@ -71,14 +75,14 @@ class Embedding():
         scheduler_3 = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
         self.scheduler = optim.lr_scheduler.SequentialLR(
         self.optimizer, schedulers=[scheduler_1, scheduler_2, scheduler_3], milestones=[20, 40])
-        print('...done!')
+        logger.info('...done!')
 
         # print number of trainable parameters
         sum_param=0
         for _, param in self.model.named_parameters():
             if param.requires_grad:
                 sum_param+=param.numel()
-        print(f'trainable parameters: {sum_param}')
+        logger.info(f'trainable parameters: {sum_param}')
 
     # Definition of training cycle
     def train_one_epoch(self, epoch_index, **vicreg_kwargs):
@@ -107,7 +111,7 @@ class Embedding():
                 last_sim_loss = running_sim_loss / 10
                 tb_x = epoch_index * len(self.train_data_loader) + idx
                 #tb_writer.add_scalar('SimLoss/train', last_sim_loss, tb_x)
-                print('SimLoss/train', last_sim_loss, tb_x)
+                logger.info(f'SimLoss/train {last_sim_loss} {tb_x}')
                 running_sim_loss = 0.
         return last_sim_loss
 
@@ -117,7 +121,7 @@ class Embedding():
 
         #for idx, val in enumerate(tqdm(val_data_loader, desc='val', leave=False), 1):
         for idx, val in enumerate(self.val_data_loader):
-            augmented_theta, _, augmented_data, unshifted_data = val
+            _, _, unshifted_data, augmented_data, _, _, _, _, _, _ = val
             embedded_values_aug, _ = self.model(augmented_data)
             embedded_values_orig, _ = self.model(unshifted_data)
             sim_loss = 0
@@ -134,9 +138,9 @@ class Embedding():
                 last_sim_loss = running_sim_loss / 5
                 tb_x = epoch_index * len(self.val_data_loader) + idx + 1
                 #tb_writer.add_scalar('SimLoss/val', last_sim_loss, tb_x)
-                print('SimLoss/val', last_sim_loss, tb_x)
+                logger.info(f'SimLoss/val {last_sim_loss} {tb_x}')
                 #tb_writer.flush()
-                print(f'Last {_repr.item():.2f}; {_cov.item():.2f}; {_std.item():.2f}')
+                logger.info(f'Last {_repr.item():.2f}; {_cov.item():.2f}; {_std.item():.2f}')
                 running_sim_loss = 0.
         #tb_writer.flush()
         return last_sim_loss
@@ -152,12 +156,12 @@ if __name__=='__main__':
     task = Embedding(datatype=datatype, datasfx='_sigma0.4_gaussian')
     task.build_model()
 
-    print('Start training...')
+    logger.info('Start training...')
 
     EPOCHS = 220
 
     for epoch_number in range(EPOCHS):
-        print('EPOCH {}:'.format(epoch_number + 1))
+        logger.info('EPOCH {}:'.format(epoch_number + 1))
         wt_repr, wt_cov, wt_std = (1, 1, 1)
 
         if epoch_number < 20:
@@ -165,7 +169,7 @@ if __name__=='__main__':
         elif epoch_number < 45:
             wt_repr, wt_cov, wt_std = (2, 2, 1)
 
-        print(f"VicReg wts: {wt_repr=} {wt_cov=} {wt_std=}")
+        logger.info(f"VicReg wts: {wt_repr=} {wt_cov=} {wt_std=}")
         # Gradient tracking
         task.model.train(True)
         avg_train_loss = task.train_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
@@ -174,7 +178,7 @@ if __name__=='__main__':
         task.model.train(False)
         avg_val_loss = task.val_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
 
-        print(f"Train/Val Sim Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
+        logger.info(f"Train/Val Sim Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
 
         wandb.log({
             'epoch': epoch_number,

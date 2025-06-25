@@ -14,5 +14,4 @@ SCRIPTS=(
 /ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sho_run_bilby_id{00000..09999..1000}.sh
 )
 
-cd /ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm
 bash ${SCRIPTS[$SLURM_ARRAY_TASK_ID]}
