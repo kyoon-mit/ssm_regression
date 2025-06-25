@@ -308,7 +308,6 @@ dependencies:
       - pyarrow==17.0.0
       - pybind11==2.13.6
       - pydantic==2.11.3
-      - pydantic-core==2.23.3
       - pygments==2.18.0
       - pykeops==2.2.3
       - pytorch-lightning==2.0.4
@@ -344,5 +343,5 @@ dependencies:
       - xxhash==3.5.0
       - yarl==1.11.1
 variables:
-  LD_LIBRARY_PATH: /lib:/work/submit/kyoon/miniforge3/lib
-prefix: /work/submit/kyoon/miniforge3/envs/ssm
+  LD_LIBRARY_PATH: /lib:/n/home04/kyoon/miniforge3/lib
+prefix: /n/home04/kyoon/miniforge3
