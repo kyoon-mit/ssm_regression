@@ -15,7 +15,6 @@ class SSMRegression():
     def __init__(
         self,
         d_input=1,
-        d_output=6,
         d_model=6,
         n_layers=4,
         dropout=0.0,
@@ -30,7 +29,6 @@ class SSMRegression():
             self.device = torch.device(device)
 
         self.d_input = d_input # number of channels (here only one time series -> 1)
-        self.d_output = d_output # number of outputs (here regression, so one output, can be several, if we want to regress several quantities)
         self.d_model = d_model
         self.n_layers = n_layers
         self.dropout = dropout
@@ -241,13 +239,13 @@ class SSMRegression():
 
 if __name__=='__main__':
 
-    task = SSMRegression(d_output=4, datatype='SineGaussian', loss='NLLGaussian')
+    task = SSMRegression(d_model=12, n_layers=8, datatype='SineGaussian', loss='NLLGaussian')
     task.build_model()
     task.setup_optimizer(lr=0.001, weight_decay=0.01)
 
     timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
-    wandb.init(project='ssm_sho_regression', name=f'{timestamp}_regression.py')
+    wandb.init(project=f'ssm_{task.datatype}_regression', name=f'ssm_{task.datatype}_{timestamp}')
 
     print('Start training...')
 
@@ -268,6 +266,31 @@ if __name__=='__main__':
             'epoch': epoch_number,
             'train_loss': avg_train_loss,
             'val_accuracy': avg_val_loss,
+            'learning_rate': task.optimizer.param_groups[0]['lr'],
+            'doc_loss': task.doc_loss,
+            'doc_val': task.doc_val,
+            'model': task.model.state_dict(),
+            'best_loss': task.best_loss,
+            'timestamp': timestamp,
+            'datatype': task.datatype,
+            'loss': task.loss,
+            'd_input': task.d_input,
+            'd_model': task.d_model,
+            'n_layers': task.n_layers,
+            'dropout': task.dropout,
+            'prenorm': task.prenorm,
+            'device': str(task.device),
+            'train_data_size': len(task.train_data),
+            'val_data_size': len(task.val_data),
+            'train_batch_size': task.TRAIN_BATCH_SIZE,
+            'val_batch_size': task.VAL_BATCH_SIZE,
+            'modeldir': task.modeldir,
+            'datadir': task.datadir,
+            'start_epoch': task.start_epoch,
+            'num_epochs': EPOCHS,
+            'optimizer': str(task.optimizer),
+            'scheduler': str(task.scheduler),
+            'wandb_run_id': wandb.run.id,
         })
 
     wandb.finish()

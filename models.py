@@ -47,7 +47,6 @@ class ConvResidualBlock(nn.Module):
         temps = self.conv_layers[1](temps)
         return inputs + temps
 
-
 class ConvResidualNet(nn.Module):
     def __init__(
         self,
@@ -122,6 +121,48 @@ class SimilarityEmbedding(nn.Module):
             x = self.activation(x) #activation of layer(x) in layers_h
         x = self.final_layer(x)
         return x, representation
+    
+# definition of EmbeddingNet
+class EmbeddingNet(nn.Module):
+    """Wrapper around the similarity embedding defined above"""
+    def __init__(self,
+                 pretraining,
+                 num_hidden_layers_h=2,
+                 context_features=3,  # needs to fit the pretraining embedding dimensionality
+                 num_repeats=10,  # number of augmentations
+                 device=None,
+                 *args,
+                 **kwargs
+    ):    
+        super().__init__(*args, **kwargs)
+
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = torch.device(device)
+
+        self.representation_net = SimilarityEmbedding(num_hidden_layers_h=num_hidden_layers_h)
+        self.representation_net.load_state_dict(torch.load(pretraining, map_location=device, weights_only=True))
+
+        # the expander network is unused and hence don't track gradients
+        for name, param in self.representation_net.named_parameters():
+            if 'expander_layer' in name or 'layers_h' in name or 'final_layer' in name:
+                param.requires_grad = False
+
+        # freeze part of the conv layer of embedding_net
+        for name, param in self.representation_net.named_parameters():
+            if 'layers_f.blocks.0' in name or 'layers_f.blocks.1' in name:
+                param.requires_grad = False
+
+        self.context_layer = nn.Identity()
+        self.context_features = context_features
+        self.num_repeats = num_repeats
+
+    def forward(self, x):
+        batch_size, _, dims = x.shape
+        x = x.reshape(batch_size, 1, dims).repeat(1, self.num_repeats, 1)
+        _, rep = self.representation_net(x)
+        return self.context_layer(rep.reshape(batch_size, self.context_features))
 
 # definition of SSM here
 class S4Model(nn.Module):

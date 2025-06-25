@@ -57,6 +57,7 @@ class Plotter:
         
         # Placeholders
         self.embedding_model = nn.Module()  # Placeholder for the model, replace with actual model loading
+        self.flow_model = nn.Module()  # Placeholder for the flow model, replace with actual model loading
         self.ssm_model = nn.Module()
 
     def similarity_outputs(self, param_index, bounds, var_name, similarity_embedding):
@@ -236,7 +237,7 @@ class Plotter:
         """
         if not model_path or not os.path.exists(model_path):
             raise ValueError(f"Model path '{model_path}' does not exist or was not provided.")
-        self.embedding_model = torch.load(model_path, map_location=self.device)
+        self.embedding_model = torch.load(model_path, map_location=self.device, weights_only=True)
 
         from models import SimilarityEmbedding
         # Initialize the model with the specified number of hidden layers
@@ -244,7 +245,7 @@ class Plotter:
             raise ValueError("Number of hidden layers must be greater than 0.")
         print(f'Embeddings: Loaded model from {model_path}')
         similarity_embedding = SimilarityEmbedding(num_hidden_layers_h=2).to(self.device)
-        state_dict = torch.load(model_path, map_location=self.device)
+        state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
         similarity_embedding.load_state_dict(state_dict)
         similarity_embedding.eval()
 
@@ -275,12 +276,131 @@ class Plotter:
             title=plot_title
         )
         return
+    
+    def flow_compute_vals(self, flow, test_data_loader, batch_size=16, num_samples=1000):
+        compute_on_cpu = True if self.device==torch.device('cpu') else False
+        pred_omega, truth_omega = [], []
+        pred_beta, truth_beta = [], []
+        pred_sigma_omega = []
+        pred_sigma_beta = []
 
-    def compute_z_scores(self, predictions, truths):
-        mean = predictions.mean()
-        std = predictions.std()
-        z_scores = (predictions - truths) / std
-        return z_scores
+        batch_contexts, batch_truths = [], []
+        for idx, (_, theta_test, data_test, _) in enumerate(test_data_loader):
+            batch_contexts.append(data_test[0][0].reshape(1, 1, 200)) # shape: (1, 1, 200)
+            batch_truths.append(theta_test[0][0, :2])
+
+            # Process in batches
+            if (idx + 1) % batch_size == 0 or (idx + 1) == len(test_data_loader):
+                contexts = torch.cat(batch_contexts, dim=0).to(self.device) # (B, 1, 200)
+                truths = torch.stack(batch_truths).to(self.device) # (B, 2)
+
+                with torch.no_grad():
+                    samples = flow.sample(num_samples, context=contexts) # (B, num_samples, param_dim)
+
+                samples = samples[..., :2] # (B, num_samples, 2)
+
+                # Move samples to CPU if required
+                if compute_on_cpu:
+                    samples = samples.cpu()
+                    truths = truths.cpu()
+                
+                preds  = samples.mean(dim=1) # (B, 2)
+                sigmas = samples.std(dim=1)
+                
+                pred_omega.extend(preds[:, 0].tolist())
+                pred_beta.extend(preds[:, 1].tolist())
+                truth_omega.extend(truths[:, 0].tolist())
+                truth_beta.extend(truths[:, 1].tolist())
+                pred_sigma_omega.extend(sigmas[:, 0].tolist())
+                pred_sigma_beta.extend(sigmas[:, 1].tolist())
+
+                # Clear for next batch
+                batch_contexts = []
+                batch_truths = []
+
+        pred_omega, truth_omega = torch.tensor(pred_omega), torch.tensor(truth_omega)
+        pred_beta, truth_beta = torch.tensor(pred_beta), torch.tensor(truth_beta)
+        pred_sigma_omega = torch.tensor(pred_sigma_omega)
+        pred_sigma_beta = torch.tensor(pred_sigma_beta)
+
+        return pred_omega, truth_omega, pred_beta, truth_beta, pred_sigma_omega, pred_sigma_beta
+
+    def plot_flow(self, embed_path='', flow_path='', save_prefix='flow'):
+        if not embed_path or not os.path.exists(embed_path):
+            raise ValueError(f"Embedding model path '{embed_path}' does not exist or was not provided.")
+        if not flow_path or not os.path.exists(flow_path):
+            raise ValueError(f"Flow model path '{flow_path}' does not exist or was not provided.")
+        timestamp = self.extract_timestamp(embed_path, sep='_')
+        from parameter_estimation import NormalizingFlow
+        nf = NormalizingFlow(datatype=self.datatype, embed_model=embed_path, device=self.device)
+        nf.build_flow()
+        flow = nf.flow
+        flow.load_state_dict(torch.load(flow_path, map_location=self.device, weights_only=True))
+        flow.eval()        
+        (pred_omega,
+        truth_omega,
+        pred_beta,
+        truth_beta,
+        pred_sigma_omega,
+        pred_sigma_beta,
+        ) = self.flow_compute_vals(
+            flow=flow,
+            test_data_loader=self.test_data_loader,
+            batch_size=16,
+            num_samples=1000,
+        )
+        omega_diffs, omega_z_scores = self.compute_z_scores(pred_omega, pred_sigma_omega, truth_omega)
+        beta_diffs, beta_z_scores = self.compute_z_scores(pred_beta, pred_sigma_beta, truth_beta)
+        # Stack into (N, 2) array
+        diffs_stacked = np.stack(
+            [omega_diffs.numpy(), beta_diffs.numpy()],
+            axis=1
+        )
+        z_scores_stacked = np.stack(
+            [omega_z_scores.numpy(), beta_z_scores.numpy()],
+            axis=1
+        )
+        labels_diffs = [r'$\hat{\omega}_0 - \omega_0$', r'$\hat{\beta} - \beta$']
+        labels_z_scores = [r'$(\hat{\omega}_0 - \omega_0)$/$\sigma_{\omega_0}$', r'$(\hat{\beta} - \beta)$/$\sigma_\beta$']
+        figure_diffs = corner.corner(
+            diffs_stacked,
+            quantiles=[0.16, 0.5, 0.84],
+            labels=labels_diffs,
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C5'
+        )
+        figure_z_scores = corner.corner(
+            z_scores_stacked,
+            quantiles=[0.16, 0.5, 0.84],
+            labels=labels_z_scores,
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C5'
+        )
+        figure_diffs.suptitle(f'Data: {self.datatype} (NF)', fontsize=12)
+        figure_diffs.subplots_adjust(top=0.87)
+        figure_z_scores.suptitle(f'Data: {self.datatype} (NF)', fontsize=12)
+        figure_z_scores.subplots_adjust(top=0.87)
+
+        # Save the figures
+        if self.save_path is not None:
+            figure_diffs.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}{timestamp}_diffs.png'), bbox_inches='tight')
+            figure_z_scores.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}{timestamp}_z_scores.png'), bbox_inches='tight')
+        else:
+            figure_diffs.tight_layout()
+            figure_diffs.show()
+            figure_z_scores.tight_layout()
+            figure_z_scores.show()
+
+    def compute_z_scores(self, pred_means, pred_stds, truth_means):
+        diffs = pred_means - truth_means
+        z_scores = (pred_means - truth_means) / pred_stds
+        return diffs, z_scores
 
     def dump_to_csv(self, outputs, filename='ssm_outputs.csv'):
         """
@@ -503,7 +623,7 @@ class Plotter:
 
         # Save the figures
         if self.save_path is not None:
-            figure_diffs.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}{timestamp}_diffs.png'), bbox_inches='tight')
+            figure_diffs.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_diffs.png'), bbox_inches='tight')
             figure_uncertainties.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_uncertainties.png'), bbox_inches='tight')
             figure_z_scores.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_z_scores.png'), bbox_inches='tight')
         else:
@@ -519,20 +639,60 @@ class Plotter:
 
         return
 
+    def plot_bilby(self, bilby_dir='/ceph/submit/data/user/k/kyoon/KYoonStudy/fitresults'):
+        """
+        Placeholder for bilby plotting function.
+        This function should be implemented to plot bilby results.
+        """
+        import pandas as pd
+        import glob
+        if self.datatype=='SHO':
+            bilby_dir = os.path.join(bilby_dir, 'bilby_sho')
+        elif self.datatype=='SineGaussian':
+            bilby_dir = os.path.join(bilby_dir, 'bilby_sg')
+        bilby_parquet = sorted(glob.glob(os.path.join(bilby_dir, f'{self.datatype}_bilby_id*.parquet')))
+        if not bilby_parquet:
+            raise FileNotFoundError(f'No bilby parquet files found in {bilby_dir} for datatype {self.datatype}')
+        parquet_name = os.path.join(bilby_dir, f'{self.datatype}_bilby_combined.parquet')
+        if not os.path.exists(parquet_name):
+            dfs = []
+            for f in bilby_parquet:
+                _df = pd.read_parquet(f)
+                print(f'Loaded {f} with shape {_df.shape}')
+                _df = _df.reset_index()
+                _df['event_id'] = _df['event_id'].ffill()
+                _df = _df.set_index('event_id')
+                dfs.append(_df)           
+            combined_df = pd.concat(dfs, axis=0, ignore_index=False)
+            print(f'Combined {len(bilby_parquet)} parquet files into a dataframe with shape {combined_df.shape}')
+            combined_df.to_parquet(parquet_name)
+            print(f'Saved combined dataframe to {parquet_name}')
+        else:
+            combined_df = pd.read_parquet(parquet_name)
+            print(f'Loaded combined dataframe from {parquet_name} with shape {combined_df.shape}')
+
 if __name__ == "__main__":
     plotter = Plotter(datatype='SHO')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path',
     #                         num_hidden_layers_h=2)
-    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250611195623.path',
-                                 save_prefix='ssm', loss='NLLGaussian')
+    plotter.plot_flow(
+        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.CNN.SHO.250612151014.path',
+        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.250618151004.path')
+    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250612122840.path',
+    #                              save_prefix='ssm', loss='NLLGaussian')
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.Quantile.20250528-013120.path',
     #                              save_prefix='ssm', loss='Quantile')
+    plotter.plot_bilby()
 
     plotter = Plotter(datatype='SineGaussian')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path',
     #                         num_hidden_layers_h=2)
-    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.NLLGaussian.250602141754.path',
-                                 save_prefix='ssm', loss='NLLGaussian', csv_output=True)
+    plotter.plot_flow(
+        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.CNN.SineGaussian.250612151238.path',
+        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.250618150334.path')
+    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250612122926.path',
+    #                              save_prefix='ssm', loss='NLLGaussian', csv_output=True)
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.Quantile.20250528-005641.path',
     #                              save_prefix='ssm', loss='Quantile')
+    plotter.plot_bilby()
     # Replace '/path/to/your/model.pth' with the actual path to your trained model
