@@ -1,15 +1,16 @@
+import logging
 import os
+from tqdm.auto import tqdm
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import numpy as np
-import wandb
-from datetime import datetime
-from tqdm.auto import tqdm
 from models import S4Model
 from losses import QuantileLoss
+
+logger = logging.getLogger('ssm_regression')
 
 class SSMRegression():
     def __init__(
@@ -20,13 +21,23 @@ class SSMRegression():
         dropout=0.0,
         prenorm=False,
         device=None,
-        datatype='SineGaussian', # 'SineGaussian', 'SHO', or 'LIGO'
+        datatype='SHO', # 'SineGaussian', 'SHO', or 'LIGO'
+        datasfx='', # suffix for the dataset, e.g., '_sigma0.4_gaussian'
         loss='NLLGaussian', # 'NLLGaussian', 'Quantile'
     ):
+        # Load datasets
+        if datatype=='SineGaussian':
+            from data_sinegaussian import DataGenerator
+        elif datatype=='SHO':
+            from data_sho import DataGenerator
+        elif datatype=='LIGO':
+            pass # TODO: implement LIGO data loading
+
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         else:
             self.device = torch.device(device)
+        logger.info(f"Using device={self.device}")
 
         self.d_input = d_input # number of channels (here only one time series -> 1)
         self.d_model = d_model
@@ -37,18 +48,10 @@ class SSMRegression():
         self.loss = loss
 
         self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
-        self.modeldir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}/output'
+        self.modeldir = os.path.join(self.datadir, 'output')
 
-        # Load datasets
-        if datatype=='SineGaussian':
-            from data_sinegaussian import DataGenerator
-        elif datatype=='SHO':
-            from data_sho import DataGenerator
-        elif datatype=='LIGO':
-            pass # TODO: implement LIGO data loading
-
-        self.train_dict = torch.load(os.path.join(self.datadir, 'train.pt'), map_location=self.device)
-        self.val_dict = torch.load(os.path.join(self.datadir, 'val.pt'), map_location=self.device)
+        self.train_dict = torch.load(os.path.join(self.datadir, f'train{datasfx}.pt'), map_location=self.device, weights_only=True)
+        self.val_dict = torch.load(os.path.join(self.datadir, f'val{datasfx}.pt'), map_location=self.device, weights_only=True)
 
         self.train_data = DataGenerator(self.train_dict)
         self.val_data = DataGenerator(self.val_dict)
@@ -66,16 +69,12 @@ class SSMRegression():
         )
 
         self.model = None
-
         self.optimizer, self.scheduler = None, None
 
-        self.best_loss = None
-        self.start_epoch = 0  # start from epoch 0 or last checkpoint epoch
-        self.doc_loss = []
-        self.doc_val = []
-
     def reshaping(self, batch, input_dim=1, output_dim=2):
-        theta_u, theta_s, data_u, data_s = batch
+        theta_u, theta_s, data_u, data_s, \
+        data_clean_u, data_noise_u, data_clean_s, data_noise_s, \
+        t_vals, event_id = batch
 
         # remove repeat (take only first repeat for unshifted data)
         if input_dim==1:
@@ -90,17 +89,17 @@ class SSMRegression():
         """
         Build the S4 model for regression.
         """
-        print('==> Building model..')
+        logger.info('==> Building S4 model...')
         # Define the model
         self.model = S4Model(d_input=self.d_input, loss=self.loss, d_model=self.d_model,
                         n_layers=self.n_layers, dropout=self.dropout, prenorm=self.prenorm)
         self.model = self.model.to(self.device)
-        print('...done!')
+        logger.info('...done!')
 
         # Count parameters
         model_parameters = filter(lambda p: p.requires_grad, self.model.parameters())
         params = sum([np.prod(p.size()) for p in model_parameters])
-        print(f'Total trainable parameters: {params}')
+        logger.info(f'Total trainable parameters: {params}')
         return
 
     def setup_optimizer(self, lr=0.01, weight_decay=0.01, epochs=10):
@@ -122,7 +121,7 @@ class SSMRegression():
         keys = sorted(set([k for hp in hps for k in hp.keys()]))
         for i, g in enumerate(optimizer.param_groups):
             group_hps = {k: g.get(k, None) for k in keys}
-            print(' | '.join([
+            logger.info(' | '.join([
                 f"Optimizer group {i}",
                 f"{len(g['params'])} tensors",
             ] + [f"{k} {v}" for k, v in group_hps.items()]))
@@ -152,7 +151,10 @@ class SSMRegression():
                 'q25':  outputs[:,2:4],
                 'q75':  outputs[:,4:6],
             }
-        else: raise ValueError(f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'.")
+        else:
+            msg = f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'."
+            logger.error(msg)
+            raise ValueError(msg)
 
     # Define loss function
     def compute_loss(self, outputs, targets):
@@ -172,7 +174,10 @@ class SSMRegression():
                 q25_loss(outputs['q25'], targets) +
                 q75_loss(outputs['q75'], targets)
             )
-        else: raise ValueError(f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'.")
+        else:
+            msg = f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'."
+            logger.error(msg)
+            raise ValueError(msg)
         return loss_fn
 
     # Training
@@ -223,21 +228,10 @@ class SSMRegression():
                 self.doc_val.append(eval_loss/(batch_idx+1))
         return eval_loss / len(self.val_data_loader)
 
-        # Save checkpoint.
-        if checkpoint:
-            if eval_loss < self.best_loss:
-                state = {
-                    'model': self.model.state_dict(),
-                    'loss': eval_loss,
-                    'epoch': epoch,
-                }
-                if not os.path.isdir('checkpoint'):
-                    os.mkdir('checkpoint')
-                torch.save(state, './checkpoint/ckpt.pth')
-                self.best_loss = loss
-            return loss
 
 if __name__=='__main__':
+    import wandb
+    from datetime import datetime
 
     task = SSMRegression(d_model=12, n_layers=8, datatype='SineGaussian', loss='NLLGaussian')
     task.build_model()
@@ -246,8 +240,6 @@ if __name__=='__main__':
     timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
     wandb.init(project=f'ssm_{task.datatype}_regression', name=f'ssm_{task.datatype}_{timestamp}')
-
-    print('Start training...')
 
     EPOCHS = 240
 

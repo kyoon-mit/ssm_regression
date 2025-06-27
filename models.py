@@ -176,7 +176,7 @@ class S4Model(nn.Module):
         prenorm=False,
     ):
         super().__init__()
-        dropout_fn = nn.Dropout2d
+        dropout_fn = nn.Dropout1d
         self.prenorm = prenorm
         self.encoder = nn.Linear(d_input, d_model)
         # Stack S4 layers as residual blocks
