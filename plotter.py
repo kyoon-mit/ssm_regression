@@ -428,6 +428,28 @@ class Plotter:
 
         return inputs, targets
 
+    # Define loss function
+    def compute_loss(self, outputs, targets, reduction='none'):
+        """
+        Define the loss function based on the specified loss type.
+        Supported losses are 'NLLGaussian' and 'Quantile'.
+        """
+        if self.loss == 'NLLGaussian':
+            criterion = nn.GaussianNLLLoss(reduction=reduction, full=False, eps=1e-7)
+            loss_fn = criterion(outputs['mean'], targets, outputs['sigma'])
+        elif self.loss == 'Quantile':
+            from losses import QuantileLoss
+            mean_loss = nn.MSELoss(reduction=reduction)
+            q25_loss = QuantileLoss(quantile=0.25, reduction=reduction)
+            q75_loss = QuantileLoss(quantile=0.75, reduction=reduction)
+            loss_fn = (
+                mean_loss(outputs['mean'], targets) +
+                q25_loss(outputs['q25'], targets) +
+                q75_loss(outputs['q75'], targets)
+            )
+        else: raise ValueError(f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'.")
+        return loss_fn
+
     def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16, compute_on_cpu=False, csv_output=False, timestamp=''):
         """
         Computes predictions and truths for the SSM model on the test data.
@@ -446,6 +468,7 @@ class Plotter:
 
         pred_param1, truth_param1 = [], []
         pred_param2, truth_param2 = [], []
+        loss_per_sample = []
         if loss=='NLLGaussian':
             pred_sigma1, pred_sigma2 = [], [] # uncertainties
         elif loss=='Quantile':
@@ -490,6 +513,7 @@ class Plotter:
                 pred_param2.extend(preds[:, 1].tolist())
                 truth_param1.extend(truths[:, 0].tolist())
                 truth_param2.extend(truths[:, 1].tolist())
+                loss_per_sample.extend(self.compute_loss(preds, truths, reduction='none').tolist())
 
                 if loss == 'NLLGaussian':
                     pred_sigma1.extend(preds[:, 2].tolist())
@@ -509,6 +533,7 @@ class Plotter:
             'truth_param1': torch.tensor(truth_param1),
             'pred_param2': torch.tensor(pred_param2),
             'truth_param2': torch.tensor(truth_param2),
+            'loss_per_sample': torch.tensor(loss_per_sample),
         }
         if loss == 'NLLGaussian':
             return_dict['pred_sigma1'] = torch.tensor(pred_sigma1)
@@ -542,10 +567,16 @@ class Plotter:
 
         ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=16, compute_on_cpu=False, csv_output=csv_output, timestamp=timestamp)
 
-        # Compute differences between predictions and truths
+        # Get differences between predictions and truths
+        param1_diff, param1_z_score = self.compute_z_scores(ssm_outputs['pred_param1'], torch.ones_like(ssm_outputs['pred_param1']), ssm_outputs['truth_param1'])
+        param2_diff, param2_z_score = self.compute_z_scores(ssm_outputs['pred_param2'], torch.ones_like(ssm_outputs['pred_param2']), ssm_outputs['truth_param2'])
         ssm_diffs = {
-            'param1_diff': ssm_outputs['pred_param1'] - ssm_outputs['truth_param1'],
-            'param2_diff': ssm_outputs['pred_param2'] - ssm_outputs['truth_param2'],
+            'param1_diff': param1_diff,
+            'param2_diff': param2_diff,
+        }
+        ssm_z_scores = {
+            'param1_z_score': param1_z_score,
+            'param2_z_score': param2_z_score,
         }
 
         # Stack into (N, 2) array
@@ -553,28 +584,14 @@ class Plotter:
             [ssm_diffs['param1_diff'].numpy(), ssm_diffs['param2_diff'].numpy()],
             axis=1
         )
-
-        # Create a corner plot
-        if self.datatype=='SHO':
-            labels_vars  = [r'$\omega_0$', r'$\beta$']
-            labels_diffs = [r'$\hat{\omega}_0 - \omega_0$', r'$\hat{\beta} - \beta$']
-        elif self.datatype=='SineGaussian':
-            labels_vars  = [r'$f_0$', r'$\tau$']
-            labels_diffs = [r'$\hat{f_0} - f_0$', r'$\hat{\tau} - \tau$']
-        figure_diffs = corner.corner(
-            ssm_diffs_stacked,
-            labels=labels_diffs,
-            quantiles=[0.16, 0.5, 0.84],
-            show_titles=True,
-            title_kwargs={"fontsize": 12},
-            label_kwargs={"fontsize": 12},
-            title_fmt='.2f',
-            color='C1'
+        ssm_z_scores_stacked = np.stack(
+            [ssm_z_scores['param1_z_score'].numpy(), ssm_z_scores['param2_z_score'].numpy()],
+            axis=1
         )
-        figure_diffs.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
-        figure_diffs.subplots_adjust(top=0.87)
+        # Get loss per sample
+        loss_per_sample = ssm_outputs['loss_per_sample'].numpy()
 
-        # Plot uncertainties
+        # Get uncertainties
         if loss == 'NLLGaussian':
             uncertainties_stacked = np.sqrt(
                 np.stack(
@@ -588,10 +605,17 @@ class Plotter:
                  ssm_outputs['pred_q75_2'].numpy() - ssm_outputs['pred_q25_2'].numpy()],
                 axis=1
             )
+
+        # Prepare labels for the plots
         if self.datatype == 'SHO':
+            labels_diffs = [r'$\hat{\omega}_0 - \omega_0$', r'$\hat{\beta} - \beta$']
             labels_uncertainties = [r'$\hat{\sigma}_{\omega_0}$', r'$\hat{\sigma}_{\beta}$']
         elif self.datatype == 'SineGaussian':
+            labels_diffs = [r'$\hat{f}_0 - f_0$', r'$\hat{\tau} - \tau$']
             labels_uncertainties = [r'$\hat{\sigma}_{f_0}$', r'$\hat{\sigma}_{\tau}$']
+        labels_z_scores = [f'({labels_diffs[i]})/{labels_uncertainties[i]}' for i in range(len(labels_diffs))]
+
+        # Plot uncertainties
         figure_uncertainties = corner.corner(
             uncertainties_stacked,
             labels=labels_uncertainties,
@@ -605,11 +629,21 @@ class Plotter:
         figure_uncertainties.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
         figure_uncertainties.subplots_adjust(top=0.87)
 
-        # Make plots of (diff)/(uncertainty)
-        z_scores_stacked = ssm_diffs_stacked / uncertainties_stacked
-        labels_z_scores = [f'({labels_diffs[i]})/{labels_uncertainties[i]}' for i in range(len(labels_vars))]
+        # Plot diffs
+        figure_diffs = corner.corner(
+            ssm_diffs_stacked,
+            quantiles=[0.16, 0.5, 0.84],
+            labels=labels_diffs,
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C5'
+        )
+
+        # Plot z_scores
         figure_z_scores = corner.corner(
-            z_scores_stacked,
+            ssm_z_scores_stacked,
             quantiles=[0.16, 0.5, 0.84],
             labels=labels_z_scores,
             show_titles=True,
@@ -620,6 +654,19 @@ class Plotter:
         )
         figure_z_scores.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
         figure_z_scores.subplots_adjust(top=0.87)
+
+        # Plot loss per sample
+        figure_loss = corner.corner(
+            loss_per_sample,
+            quantiles=[0.16, 0.5, 0.84],
+            labels=[f'{loss} loss per sample'],
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C7'
+        )
+        figure_loss.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
 
         # Save the figures
         if self.save_path is not None:
@@ -675,24 +722,24 @@ if __name__ == "__main__":
     plotter = Plotter(datatype='SHO')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path',
     #                         num_hidden_layers_h=2)
-    plotter.plot_flow(
-        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.CNN.SHO.250612151014.path',
-        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.250618151004.path')
-    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250612122840.path',
-    #                              save_prefix='ssm', loss='NLLGaussian')
+    # plotter.plot_flow(
+    #     embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.CNN.SHO.250612151014.path',
+    #     flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.250618151004.path')
+    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250612122840.path',
+                                 save_prefix='ssm', loss='NLLGaussian')
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.Quantile.20250528-013120.path',
     #                              save_prefix='ssm', loss='Quantile')
-    plotter.plot_bilby()
+    # plotter.plot_bilby()
 
     plotter = Plotter(datatype='SineGaussian')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.CNN.20250503-220716.path',
     #                         num_hidden_layers_h=2)
-    plotter.plot_flow(
-        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.CNN.SineGaussian.250612151238.path',
-        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.250618150334.path')
-    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250612122926.path',
-    #                              save_prefix='ssm', loss='NLLGaussian', csv_output=True)
+    # plotter.plot_flow(
+    #     embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.CNN.SineGaussian.250612151238.path',
+    #     flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.250618150334.path')
+    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250612122926.path',
+                                 save_prefix='ssm', loss='NLLGaussian', csv_output=True)
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.Quantile.20250528-005641.path',
     #                              save_prefix='ssm', loss='Quantile')
-    plotter.plot_bilby()
+    # plotter.plot_bilby()
     # Replace '/path/to/your/model.pth' with the actual path to your trained model
