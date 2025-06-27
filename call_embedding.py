@@ -13,10 +13,10 @@ def parse_args():
                         choices=['SHO', 'SineGaussian', 'LIGO'],
                         help='Data type or dataset.')
     parser.add_argument('-d', '--device', type=str,
-                        default='cpu',
+                        default='cuda',
                         help='Device to run on.')
     parser.add_argument('-e', '--epochs', type=int,
-                        default=220,
+                        default=150,
                         help='Number of epochs.')
     parser.add_argument('-b', '--batch_size', type=int,
                         default=1000,
@@ -31,6 +31,8 @@ def parse_args():
     parser.add_argument('--loglevel', type=str, default='info',
                         choices=['notset', 'debug', 'info', 'warning', 'error', 'critical'],
                         help='Log level.')
+    parser.add_argument('--comment', type=str, default='',
+                        help='Comment for the run.')
     args = parser.parse_args()
     print(args)
     return args
@@ -67,10 +69,17 @@ def main():
     configure_logging(logfile=args.logfile, loglevel=args.loglevel)
     
     datatype = args.datatype
+    datatag = 'toy'  # default tag for toy datasets
+    if datatype not in ['SHO', 'SineGaussian', 'LIGO']:
+        raise ValueError(f"Invalid datatype: {datatype}. Choose from 'SHO', 'SineGaussian', or 'LIGO'.")
+    if datatype=='SHO': datatag = 'sho'
+    elif datatype=='SineGaussian': datatag = 'sg'
+    elif datatype=='LIGO': datatag = 'ligo'
+
     timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
     # os.environ['WANDB_MODE'] = 'offline'
-    wandb.init(project=f'embedding_{datatype}', name=f'embedding_{datatype}_{timestamp}')
+    wandb.init(project=f'embedding_{datatag}', name=f'embedding_{datatag}_{timestamp}')
 
     task = Embedding(datatype=datatype, datasfx=args.suffix,
                     device=args.device, batch_size=args.batch_size,
@@ -108,7 +117,16 @@ def main():
             'lr': task.optimizer.param_groups[0]['lr'],
             'wt_repr': wt_repr,
             'wt_cov': wt_cov,
-            'wt_std': wt_std
+            'wt_std': wt_std,
+            'num_hidden_layers_h': args.num_hidden_layers_h,
+            'datatype': datatype,
+            'datasfx': args.suffix,
+            'device': args.device,
+            'batch_size': args.batch_size,
+            'timestamp': timestamp,
+            'modeldir': task.modeldir,
+            'modelname': f'model.CNN.{datatype}.{timestamp}.path',
+            'comment': args.comment
         })
 
         epoch_number += 1
