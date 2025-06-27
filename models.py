@@ -1,4 +1,4 @@
-#from s4d import S4D
+from s4d import S4D
 #from s4 import S4Block as S4
 from torch import nn, optim
 import torch
@@ -46,7 +46,6 @@ class ConvResidualBlock(nn.Module):
         temps = self.dropout(temps)
         temps = self.conv_layers[1](temps)
         return inputs + temps
-
 
 class ConvResidualNet(nn.Module):
     def __init__(
@@ -122,3 +121,108 @@ class SimilarityEmbedding(nn.Module):
             x = self.activation(x) #activation of layer(x) in layers_h
         x = self.final_layer(x)
         return x, representation
+    
+# definition of EmbeddingNet
+class EmbeddingNet(nn.Module):
+    """Wrapper around the similarity embedding defined above"""
+    def __init__(self,
+                 pretraining,
+                 num_hidden_layers_h=2,
+                 context_features=3,  # needs to fit the pretraining embedding dimensionality
+                 num_repeats=10,  # number of augmentations
+                 device=None,
+                 *args,
+                 **kwargs
+    ):    
+        super().__init__(*args, **kwargs)
+
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = torch.device(device)
+
+        self.representation_net = SimilarityEmbedding(num_hidden_layers_h=num_hidden_layers_h)
+        self.representation_net.load_state_dict(torch.load(pretraining, map_location=device, weights_only=True))
+
+        # the expander network is unused and hence don't track gradients
+        for name, param in self.representation_net.named_parameters():
+            if 'expander_layer' in name or 'layers_h' in name or 'final_layer' in name:
+                param.requires_grad = False
+
+        # freeze part of the conv layer of embedding_net
+        for name, param in self.representation_net.named_parameters():
+            if 'layers_f.blocks.0' in name or 'layers_f.blocks.1' in name:
+                param.requires_grad = False
+
+        self.context_layer = nn.Identity()
+        self.context_features = context_features
+        self.num_repeats = num_repeats
+
+    def forward(self, x):
+        batch_size, _, dims = x.shape
+        x = x.reshape(batch_size, 1, dims).repeat(1, self.num_repeats, 1)
+        _, rep = self.representation_net(x)
+        return self.context_layer(rep.reshape(batch_size, self.context_features))
+
+# definition of SSM here
+class S4Model(nn.Module):
+    def __init__(
+        self,
+        d_input,
+        loss:str,
+        d_model=256,
+        n_layers=4,
+        dropout=0.2,
+        prenorm=False,
+    ):
+        super().__init__()
+        dropout_fn = nn.Dropout1d
+        self.prenorm = prenorm
+        self.encoder = nn.Linear(d_input, d_model)
+        # Stack S4 layers as residual blocks
+        self.s4_layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+        for _ in range(n_layers):
+            self.s4_layers.append(
+                S4D(d_model, dropout=dropout, transposed=True, lr=min(0.001, 0.01))
+            )
+            self.norms.append(nn.LayerNorm(d_model))
+            self.dropouts.append(dropout_fn(dropout))
+        if loss=='NLLGaussian': d_output=4
+        elif loss=='Quantile': d_output=6
+        else: raise ValueError(f'Unrecognized {loss=}.')
+        self.loss=loss
+        # Linear decoder
+        self.decoder = nn.Linear(d_model, d_output)
+
+    def forward(self, x):
+        """
+        Input x is shape (B, L, d_input)
+        """
+        x = self.encoder(x)  # (B, L, d_input) -> (B, L, d_model)
+        x = x.transpose(-1, -2)  # (B, L, d_model) -> (B, d_model, L)
+        for layer, norm, dropout in zip(self.s4_layers, self.norms, self.dropouts):
+            # Each iteration of this loop will map (B, d_model, L) -> (B, d_model, L)
+            z = x
+            if self.prenorm:
+                # Prenorm
+                z = norm(z.transpose(-1, -2)).transpose(-1, -2)
+            # Apply S4 block: we ignore the state input and output
+            z, _ = layer(z)
+            # Dropout on the output of the S4 block
+            z = dropout(z)
+            # Residual connection
+            x = z + x
+            if not self.prenorm:
+                # Postnorm
+                x = norm(x.transpose(-1, -2)).transpose(-1, -2)
+        x = x.transpose(-1, -2)
+        # Pooling: average pooling over the sequence length
+        x = x.mean(dim=1)
+        # Decode the outputs
+        x = self.decoder(x)  # (B, d_model) -> (B, d_output)
+        if self.loss=='NLLGaussian':
+            x_uncertainties = F.softplus(x[..., 2:4])
+            x = torch.cat([x[..., 0:2], x_uncertainties], dim=-1)
+        return x

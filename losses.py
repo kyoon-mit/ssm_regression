@@ -68,3 +68,40 @@ class VICRegLoss(nn.Module):
         assert n == m
         # All off diagonal elements from complete batch flattened
         return x.flatten(start_dim=1)[...,:-1].view(num_batch, n - 1, n + 1)[...,1:].flatten()
+
+class QuantileLoss(nn.Module):
+    """Quantile Loss for regression tasks.
+    This loss is useful when you want to predict a quantile of the target distribution.
+
+    Args:
+        quantile (float): The quantile to predict. Default is 0.25 for the first quantile.
+        reduction (str): The reduction method to apply to the loss. Default is 'mean'.
+            Valid options are 'mean', 'sum', or 'none'.
+
+    Raises:
+        ValueError: If the reduction method is not one of the valid options.
+
+    Example:
+        >>> loss_fn = QuantileLoss(quantile=0.25, reduction='mean')
+        >>> pred = torch.tensor([0.5, 1.0, 1.5])
+        >>> target = torch.tensor([0.0, 1.0, 2.0])
+        >>> loss = loss_fn(pred, target)
+        >>> print(loss)  # Output will be the quantile loss value
+    """
+    def __init__(self, quantile=0.25, reduction='mean'):
+        super().__init__
+        self.quantile = quantile
+        if reduction not in ['mean', 'sum', 'none']:
+            raise ValueError(f"Invalid reduction mode: {reduction}. Choose from 'mean', 'sum', or 'none'.")
+        self.reduction = reduction
+
+    def forward(self, pred, target):
+        z = target - pred
+        loss = torch.where(z > 0, self.quantile * z, (self.quantile - 1) * z)
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+
