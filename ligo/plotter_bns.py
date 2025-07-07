@@ -1,0 +1,413 @@
+import os
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from torch import nn
+from torch.utils.data import DataLoader
+
+import corner
+from matplotlib.patches import Patch
+
+import sys
+
+print(sys.executable)
+print(torch.__version__)
+print(torch.version.cuda)
+print(torch.cuda.is_available())
+
+class Plotter:
+    def __init__(
+        self,
+        save_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/plots',
+        datatype='BNS',
+        hdf5_path='', # path to the HDF5 dataset
+        split_indices_file='',
+    ):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f'Using device={self.device}')
+
+        # Load datasets
+        if datatype == 'BNS':
+            from data_bns import get_dataloaders
+        else:
+            raise ValueError(f'Unknown datatype: {datatype}')
+        self.datatype = datatype
+        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{datatype}'
+        self.test_data_loader = get_dataloaders(
+            hdf5_path=hdf5_path,
+            test_batch_size=1,
+            train_split=0.8,
+            test_split=0.1,
+            split_indices_file='',  # No precomputed indices file
+            random_seed=42
+        )
+
+        self.save_path = save_path
+        if not os.path.exists(self.save_path):
+            os.makedirs(self.save_path, exist_ok=True)
+            print(f'Created save path: {self.save_path}')
+        
+        # Placeholders
+        self.ssm_model = nn.Module()
+
+    def extract_timestamp(self, filepath, sep='_'):
+        """ Extracts the timestamp from the filename in the format '<directory>/YYYYMMDDHHMMSS.path'.
+        Args:
+            filepath (str): Path to the file from which to extract the timestamp.
+            sep (str): Separator used in the filename. Default is '_'.
+        Returns:
+            str: The extracted timestamp in the format sep + 'YYYYMMDDHHMMSS', or '' if not found.
+        Raises:
+            ValueError: If the file path does not exist, is not a string, or does not end with '.path'.
+            ValueError: If the filename does not match the expected format.
+            ValueError: If the timestamp is not found in the filename.
+        """
+        import re
+        if not os.path.exists(filepath):
+            raise ValueError(f"File path '{filepath}' does not exist.")
+        if not isinstance(filepath, str):
+            raise ValueError("File path must be a string.")
+        if not filepath.endswith('.path'):
+            raise ValueError("File path must end with '.path'.")
+        if not isinstance(sep, str):
+            raise ValueError("Separator must be a string.")
+        filename = os.path.basename(filepath)
+        match = re.search(r'(\d{12})\.path$', filename)
+        if match:
+            return sep + match.group(1)
+        else:
+            return ''
+
+    def compute_z_scores(self, pred_means, pred_stds, truth_means):
+        diffs = pred_means - truth_means
+        z_scores = (pred_means - truth_means) / pred_stds
+        return diffs, z_scores
+
+    def dump_to_csv(self, outputs, filename='ssm_outputs.csv'):
+        """
+        Dumps the outputs to a CSV file.
+        Args:
+            outputs (dict): Dictionary containing the outputs to be saved.
+            filename (str): Name of the output CSV file.
+        """
+        import pandas as pd
+
+        df = pd.DataFrame(outputs)
+        df.to_csv(os.path.join(self.save_path, filename), index=False)
+        print(f'Saved outputs to {filename}')
+        return df
+
+    # Define loss function
+    def compute_loss(self, outputs, targets, reduction='none'):
+        """
+        Define the loss function based on the specified loss type.
+        Supported losses are 'NLLGaussian' and 'Quantile'.
+        """
+        if self.loss == 'NLLGaussian':
+            criterion = nn.GaussianNLLLoss(reduction=reduction, full=False, eps=1e-7)
+            loss_fn = criterion(outputs['mean'], targets, outputs['sigma'])
+        elif self.loss == 'Quantile':
+            from losses import QuantileLoss
+            mean_loss = nn.MSELoss(reduction=reduction)
+            q25_loss = QuantileLoss(quantile=0.25, reduction=reduction)
+            q75_loss = QuantileLoss(quantile=0.75, reduction=reduction)
+            loss_fn = (
+                mean_loss(outputs['mean'], targets) +
+                q25_loss(outputs['q25'], targets) +
+                q75_loss(outputs['q75'], targets)
+            )
+        else: raise ValueError(f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'.")
+        return loss_fn
+
+    def stack_inputs_truths(self, vals):
+        h1, l1, params, idx = vals
+        mass_1 = params['mass_1'].to(self.device)
+        mass_2 = params['mass_2'].to(self.device)
+        chirp_mass = (mass_1 * mass_2)**(3/5) / (mass_1 + mass_2)**(1/5)
+        mass_ratio = mass_2 / mass_1
+        total_mass = mass_1 + mass_2
+        right_ascension = params['ra'].to(self.device)
+        declination = params['dec'].to(self.device)
+        redshift = params['redshift'].to(self.device)
+        theta_jn = params['theta_jn'].to(self.device)
+
+        inputs = torch.stack([h1.to(self.device), l1.to(self.device)], dim=2)
+        truths = torch.stack([mass_1, mass_2,
+                               chirp_mass, mass_ratio, total_mass,
+                               right_ascension, declination, redshift, theta_jn], dim=1)
+        return inputs, truths
+
+    def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16, compute_on_cpu=False, csv_output=False, timestamp=''):
+        """
+        Computes predictions and truths for the SSM model on the test data.
+
+        Args:
+            ssm_model (nn.Module): The SSM model to evaluate.
+            loss (str): Loss function used in the model ('NLLGaussian' or 'Quantile').
+            batch_size (int): Number of samples to process in each batch.
+            compute_on_cpu (bool): If True, move computations to CPU.
+            csv_output (bool): If True, save outputs to a CSV file.
+            timestamp (str): Timestamp to append to the output filename.
+
+        Returns:
+            dict: Dictionary containing predictions and truths.
+        """
+        param_list = ['mass_1', 'mass_2', 'chirp_mass', 'mass_ratio',
+            'total_mass', 'right_ascension', 'declination',
+            'redshift', 'theta_jn']
+        
+        def dinit():
+            l =  param_list
+            d = {k: [] for k in l}
+            return d
+        
+        def maketensor(d):
+            return {k: torch.tensor(v) for k, v in d.items()}
+        
+        pred_dict, truth_dict = dinit(), dinit()
+        loss_per_sample = []
+        if loss=='NLLGaussian':
+            pred_sigma_dict = dinit()
+        elif loss=='Quantile':
+            pred_q25_dict, pred_q75_dict = dinit(), dinit()
+        else:
+            raise ValueError(f'Unknown loss function: {loss}')
+
+        batch_contexts, batch_truths = [], []
+
+        device = next(ssm_model.parameters()).device
+        ssm_model.eval()
+
+        # Redefine the test data loader to iterate over batches
+        self.test_data_loader = DataLoader(
+            self.test_data, batch_size=batch_size, num_workers=0,
+            shuffle=False)
+
+        for idx, vals in enumerate(self.test_data_loader):
+            inputs, truths = self.stack_inputs_truths(vals)
+            batch_contexts.append(inputs) # shape: (B, 2, length of sequence)
+            batch_truths.append(truths)   # shape: (B, 9)
+
+            # Process in batches
+            if (idx + 1) % batch_size == 0 or (idx + 1) == len(self.test_data_loader):
+                contexts = torch.cat(batch_contexts, dim=0).to(device) # (B, 2, length of sequence)
+                truths = torch.cat(batch_truths).to(device)            # (B, 9)
+
+                with torch.no_grad():
+                    preds = ssm_model(contexts)
+
+                if preds.ndim == 3:
+                    preds = preds.squeeze(1)  # e.g., (B, 2, N) → (B, N)
+
+                # Move samples to CPU if required
+                if compute_on_cpu:
+                    preds = preds.cpu()
+                    truths = truths.cpu()                       # (B, 2)
+                
+                for i in range(param_list):
+                    p = param_list[i]
+                    pred_dict[p].extend(preds[:, i].tolist())
+                    truth_dict[p].extend(truths[:, i].tolist())
+                    if loss=='NLLGaussian':
+                        pred_sigma_dict[p].extend(preds[:, i+len(param_list)].tolist())
+                    elif loss=='Quantile':
+                        pred_q25_dict[p].extend(preds[:, i+len(param_list)].tolist())
+                        pred_q75_dict[p].extend(preds[:, i+2*len(param_list)].tolist())
+                loss_per_sample.extend(self.compute_loss(preds, truths, reduction='none').tolist())
+
+                # Clear for next batch
+                batch_contexts.clear()
+                batch_truths.clear()
+
+        return_dict = {'loss_per_sample': torch.tensor(loss_per_sample)}
+        return_dict.update(maketensor(pred_dict))
+        return_dict.update(maketensor(truth_dict))
+        if loss=='NLLGaussian':
+            return_dict.update(maketensor(pred_sigma_dict))
+        elif loss=='Quantile':
+            return_dict.update(maketensor(pred_q25_dict))
+            return_dict.update(maketensor(pred_q75_dict))
+
+        if csv_output:
+            self.dump_to_csv(return_dict, filename=f'ssm_{self.datatype}_{loss}{timestamp}_outputs.csv')
+
+        return return_dict
+
+    def plot_ssm_predictions(self, d_input, d_model, n_layers, model_path='', batch_size=16,
+                             save_prefix='ssm', loss='NLLGaussian', csv_output=False):
+        timestamp = self.extract_timestamp(model_path, sep='_')
+        from models import S4Model
+        if loss=='NLLGaussian': d_output = 18
+        elif loss=='Quantile': d_output = 27
+        else: raise ValueError(f'Unknown loss function: {loss}')
+        if not model_path or not os.path.exists(model_path):
+            raise ValueError(f"Model path '{model_path}' does not exist or was not provided.")
+        self.ssm_model = S4Model(d_input=d_input, d_output=d_output, d_model=d_model, n_layers=n_layers, dropout=0.0, prenorm=False)
+        self.ssm_model = self.ssm_model.to(self.device)
+        self.ssm_model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
+        self.ssm_model.eval()
+
+        ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=batch_size,
+                                            compute_on_cpu=False, csv_output=csv_output, timestamp=timestamp)
+
+        """
+        # Get differences between predictions and truths
+        param1_diff, param1_z_score = self.compute_z_scores(ssm_outputs['pred_param1'], torch.ones_like(ssm_outputs['pred_param1']), ssm_outputs['truth_param1'])
+        param2_diff, param2_z_score = self.compute_z_scores(ssm_outputs['pred_param2'], torch.ones_like(ssm_outputs['pred_param2']), ssm_outputs['truth_param2'])
+        ssm_diffs = {
+            'param1_diff': param1_diff,
+            'param2_diff': param2_diff,
+        }
+        ssm_z_scores = {
+            'param1_z_score': param1_z_score,
+            'param2_z_score': param2_z_score,
+        }
+
+        # Stack into (N, 2) array
+        ssm_diffs_stacked = np.stack(
+            [ssm_diffs['param1_diff'].numpy(), ssm_diffs['param2_diff'].numpy()],
+            axis=1
+        )
+        ssm_z_scores_stacked = np.stack(
+            [ssm_z_scores['param1_z_score'].numpy(), ssm_z_scores['param2_z_score'].numpy()],
+            axis=1
+        )
+        # Get loss per sample
+        loss_per_sample = ssm_outputs['loss_per_sample'].numpy()
+
+        # Get uncertainties
+        if loss == 'NLLGaussian':
+            uncertainties_stacked = np.sqrt(
+                np.stack(
+                    [ssm_outputs['pred_sigma1'].numpy(), ssm_outputs['pred_sigma2'].numpy()],
+                    axis=1
+                )
+            )
+        elif loss == 'Quantile':
+            uncertainties_stacked = np.stack(
+                [ssm_outputs['pred_q75_1'].numpy() - ssm_outputs['pred_q25_1'].numpy(),
+                 ssm_outputs['pred_q75_2'].numpy() - ssm_outputs['pred_q25_2'].numpy()],
+                axis=1
+            )
+
+        # Prepare labels for the plots
+        if self.datatype == 'SHO':
+            labels_diffs = [r'$\hat{\omega}_0 - \omega_0$', r'$\hat{\beta} - \beta$']
+            labels_uncertainties = [r'$\hat{\sigma}_{\omega_0}$', r'$\hat{\sigma}_{\beta}$']
+        elif self.datatype == 'SineGaussian':
+            labels_diffs = [r'$\hat{f}_0 - f_0$', r'$\hat{\tau} - \tau$']
+            labels_uncertainties = [r'$\hat{\sigma}_{f_0}$', r'$\hat{\sigma}_{\tau}$']
+        labels_z_scores = [f'({labels_diffs[i]})/{labels_uncertainties[i]}' for i in range(len(labels_diffs))]
+
+        # Plot uncertainties
+        figure_uncertainties = corner.corner(
+            uncertainties_stacked,
+            labels=labels_uncertainties,
+            quantiles=[0.16, 0.5, 0.84],
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C3'
+        )
+        figure_uncertainties.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        figure_uncertainties.subplots_adjust(top=0.87)
+
+        # Plot diffs
+        figure_diffs = corner.corner(
+            ssm_diffs_stacked,
+            quantiles=[0.16, 0.5, 0.84],
+            labels=labels_diffs,
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C5'
+        )
+
+        # Plot z_scores
+        figure_z_scores = corner.corner(
+            ssm_z_scores_stacked,
+            quantiles=[0.16, 0.5, 0.84],
+            labels=labels_z_scores,
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C4'
+        )
+        figure_z_scores.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        figure_z_scores.subplots_adjust(top=0.87)
+
+        # Plot loss per sample
+        figure_loss = corner.corner(
+            loss_per_sample,
+            quantiles=[0.16, 0.5, 0.84],
+            labels=[f'{loss} loss per sample'],
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C7'
+        )
+        figure_loss.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+
+        # Save the figures
+        if self.save_path is not None:
+            figure_diffs.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_diffs.png'), bbox_inches='tight')
+            figure_uncertainties.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_uncertainties.png'), bbox_inches='tight')
+            figure_z_scores.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_z_scores.png'), bbox_inches='tight')
+        else:
+            figure_diffs.tight_layout()
+            figure_diffs.show()
+            figure_uncertainties.tight_layout()
+            figure_uncertainties.show()
+            figure_z_scores.tight_layout()
+            figure_z_scores.show()
+
+        print(f'Saved SSM predictions plots to {self.save_path}')
+        print(f'SSM predictions computed with loss={loss}')
+        """
+
+        return
+
+    def plot_bilby(self, bilby_dir='/ceph/submit/data/user/k/kyoon/KYoonStudy/fitresults'):
+        """
+        Placeholder for bilby plotting function.
+        This function should be implemented to plot bilby results.
+        """
+        import pandas as pd
+        import glob
+        if self.datatype=='SHO':
+            bilby_dir = os.path.join(bilby_dir, 'bilby_sho')
+        elif self.datatype=='SineGaussian':
+            bilby_dir = os.path.join(bilby_dir, 'bilby_sg')
+        bilby_parquet = sorted(glob.glob(os.path.join(bilby_dir, f'{self.datatype}_bilby_id*.parquet')))
+        if not bilby_parquet:
+            raise FileNotFoundError(f'No bilby parquet files found in {bilby_dir} for datatype {self.datatype}')
+        parquet_name = os.path.join(bilby_dir, f'{self.datatype}_bilby_combined.parquet')
+        if not os.path.exists(parquet_name):
+            dfs = []
+            for f in bilby_parquet:
+                _df = pd.read_parquet(f)
+                print(f'Loaded {f} with shape {_df.shape}')
+                _df = _df.reset_index()
+                _df['event_id'] = _df['event_id'].ffill()
+                _df = _df.set_index('event_id')
+                dfs.append(_df)           
+            combined_df = pd.concat(dfs, axis=0, ignore_index=False)
+            print(f'Combined {len(bilby_parquet)} parquet files into a dataframe with shape {combined_df.shape}')
+            combined_df.to_parquet(parquet_name)
+            print(f'Saved combined dataframe to {parquet_name}')
+        else:
+            combined_df = pd.read_parquet(parquet_name)
+            print(f'Loaded combined dataframe from {parquet_name} with shape {combined_df.shape}')
+
+if __name__ == "__main__":
+    model_path = '' # TODO
+    plotter = Plotter(datatype='BNS',
+                      hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
+                      split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')
+    plotter.plot_ssm_predictions(d_input=1, d_model=2, n_layers=1,
+                                 model_path=model_path)
