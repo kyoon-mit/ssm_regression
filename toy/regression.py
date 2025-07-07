@@ -17,6 +17,7 @@ class SSMRegression():
         self,
         d_input=1,
         d_model=6,
+        d_output=4,
         n_layers=4,
         dropout=0.0,
         prenorm=False,
@@ -40,6 +41,7 @@ class SSMRegression():
         logger.info(f"Using device={self.device}")
 
         self.d_input = d_input # number of channels (here only one time series -> 1)
+        self.d_output = d_output
         self.d_model = d_model
         self.n_layers = n_layers
         self.dropout = dropout
@@ -91,8 +93,9 @@ class SSMRegression():
         """
         logger.info('==> Building S4 model...')
         # Define the model
-        self.model = S4Model(d_input=self.d_input, loss=self.loss, d_model=self.d_model,
-                        n_layers=self.n_layers, dropout=self.dropout, prenorm=self.prenorm)
+        self.model = S4Model(d_input=self.d_input, loss=self.loss, d_output=self.d_output,
+                             d_model=self.d_model, n_layers=self.n_layers, dropout=self.dropout,
+                             prenorm=self.prenorm)
         self.model = self.model.to(self.device)
         logger.info('...done!')
 

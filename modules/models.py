@@ -169,6 +169,7 @@ class S4Model(nn.Module):
     def __init__(
         self,
         d_input,
+        d_output,
         loss:str,
         d_model=256,
         n_layers=4,
@@ -189,12 +190,12 @@ class S4Model(nn.Module):
             )
             self.norms.append(nn.LayerNorm(d_model))
             self.dropouts.append(dropout_fn(dropout))
-        if loss=='NLLGaussian': d_output=4
-        elif loss=='Quantile': d_output=6
-        else: raise ValueError(f'Unrecognized {loss=}.')
+        self.d_output = d_output
         self.loss=loss
+        if loss=='NLLGaussian' and (d_output % 2 != 0):
+            raise ValueError(f'If {loss=}, d_output must be an even number.')
         # Linear decoder
-        self.decoder = nn.Linear(d_model, d_output)
+        self.decoder = nn.Linear(d_model, self.d_output)
 
     def forward(self, x):
         """
@@ -223,6 +224,73 @@ class S4Model(nn.Module):
         # Decode the outputs
         x = self.decoder(x)  # (B, d_model) -> (B, d_output)
         if self.loss=='NLLGaussian':
-            x_uncertainties = F.softplus(x[..., 2:4])
-            x = torch.cat([x[..., 0:2], x_uncertainties], dim=-1)
+            mid_idx = int(self.d_output/2)
+            x_uncertainties = F.softplus(x[..., mid_idx:])
+            x = torch.cat([x[..., :mid_idx], x_uncertainties], dim=-1)
         return x
+    
+# Definition of quantile regression (arXiv:2505.18311)
+class QuantileRegressionNN(nn.Module):
+    """
+    Neural Network for Quantile Regression as described in arXiv:2505.18311
+    """
+    def __init__(self, input_dim=8, quantiles=(0.1, 0.5, 0.9), target='chirp_mass'):
+        """
+        Args:
+            input_dim (int): Number of input features (8 in the paper)
+            quantiles (tuple): Quantiles to estimate
+            target (str): One of 'chirp_mass', 'mass_ratio', 'total_mass'
+        """
+        super(QuantileRegressionNN, self).__init__()
+        self.quantiles = quantiles
+        self.target = target
+        self.num_quantiles = len(quantiles)
+
+        # Preprocessing
+        self.norm = nn.LayerNorm(input_dim)
+
+        # Hidden layers
+        self.fc1 = nn.Linear(input_dim, 24)
+        self.fc2 = nn.Linear(24, 12)
+        self.dropout = nn.Dropout(p=0.25)
+        self.leaky_relu = nn.LeakyReLU()
+
+        # Output: raw quantile estimates
+        self.output = nn.Linear(12, self.num_quantiles)
+
+    def forward(self, x, recovered_param=None):
+        """
+        Args:
+            x: Input tensor (batch_size, input_dim)
+            recovered_param: Recovered parameter from pipeline (batch_size,)
+                             Needed for chirp_mass and total_mass scaling
+        Returns:
+            Quantile predictions (batch_size, num_quantiles)
+        """
+        # Normalize
+        x = self.norm(x)
+
+        # Hidden layers
+        x = self.leaky_relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.leaky_relu(self.fc2(x))
+
+        # Raw quantiles
+        q_raw = self.output(x)
+
+        # Sort outputs in ascending order (SoftSort can be approximated as sort)
+        q_sorted, _ = torch.sort(q_raw, dim=1)
+
+        if self.target == 'mass_ratio':
+            # Constrain to [0,1]
+            q_final = torch.sigmoid(q_sorted)
+        elif self.target in ['chirp_mass', 'total_mass']:
+            # Apply exp and scale
+            if recovered_param is None:
+                raise ValueError("recovered_param must be provided for chirp_mass or total_mass")
+            q_exp = torch.exp(q_sorted)
+            q_final = recovered_param.unsqueeze(1) * q_exp
+        else:
+            raise ValueError("Invalid target specified")
+
+        return q_final

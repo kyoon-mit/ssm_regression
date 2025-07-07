@@ -20,12 +20,13 @@ class SSMRegression():
 
     def __init__(
         self,
-        d_input=1,
+        d_input=2,
+        d_output=18,
         d_model=6,
         n_layers=4,
         dropout=0.0,
-        train_batch_size=10,
-        val_batch_size=10,
+        train_batch_size=100,
+        val_batch_size=100,
         prenorm=False,
         device=None,
         datatype='BNS', # 'BNS'
@@ -40,7 +41,7 @@ class SSMRegression():
     ):
         # Load datasets
         if datatype=='BNS':
-            from data_bns import DataGenerator, get_dataloaders
+            from data_bns import get_dataloaders
         else:
             self.__raise__(f'Unsupported datatype: {datatype}', exc_type=ValueError)
 
@@ -50,7 +51,8 @@ class SSMRegression():
             self.device = torch.device(device)
         logger.info(f"Using device={self.device}")
 
-        self.d_input = d_input # number of channels (here only one time series -> 1)
+        self.d_input = d_input # number of channels
+        self.d_output = d_output
         self.d_model = d_model
         self.n_layers = n_layers
         self.dropout = dropout
@@ -60,6 +62,9 @@ class SSMRegression():
 
         self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
         self.modeldir = os.path.join(self.datadir, 'output')
+        if not os.path.exists(self.modeldir):
+            os.makedirs(self.modeldir)
+            logger.info(f'Created model directory: {self.modeldir}')
 
         self.TRAIN_BATCH_SIZE = train_batch_size
         self.VAL_BATCH_SIZE = val_batch_size
@@ -70,7 +75,7 @@ class SSMRegression():
             val_batch_size=self.VAL_BATCH_SIZE,
             train_split=0.8,
             test_split=0.1,
-            split_indices_file='',  # No precomputed indices file
+            split_indices_file=split_indices_file,
             random_seed=42
         )
 
@@ -83,9 +88,12 @@ class SSMRegression():
         """
         logger.info('==> Building S4 model...')
         # Define the model
-        self.model = S4Model(d_input=self.d_input, loss=self.loss, d_model=self.d_model,
-                        n_layers=self.n_layers, dropout=self.dropout, prenorm=self.prenorm)
+        self.model = S4Model(d_input=self.d_input, d_output=self.d_output, loss=self.loss,
+                             d_model=self.d_model, n_layers=self.n_layers, dropout=self.dropout,
+                             prenorm=self.prenorm)
         self.model = self.model.to(self.device)
+        # Requires setup with torch.distributed.launch or torchrun
+        # self.model = torch.nn.parallel.DistributedDataParallel(self.model)
         logger.info('...done!')
 
         # Count parameters
@@ -127,21 +135,21 @@ class SSMRegression():
 
     def split_outputs(self, outputs):
         """
-        If loss is 'NLLGaussian', outputs are of shape (B, 4) with mean and uncertainties.
-        If loss is 'Quantile', outputs are of shape (B, 6) with mean, q25, and q75.
-        Split model output of shape (B, 6) into mean, 25% quantile, and 75% quantile predictions.
-        Returns a dict with 'mean', 'q25', and 'q75' tensors each of shape (B, 2).
+        Outputs are of shape (B, 18) with mean and uncertainties.
+        If loss is 'Quantile', outputs are of shape (B, 27) with mean, q25, and q75.
+        Split model output of shape (B, 27) into mean, 25% quantile, and 75% quantile predictions.
+        Returns a dict with 'mean', 'q25', and 'q75' tensors each of shape (B, 27).
         """
         if self.loss == 'NLLGaussian':
             return {
-                'mean': outputs[:,:2], # mean predictions on the two parameters
-                'sigma': outputs[:,2:4], # uncertainties on the two parameters
+                'mean': outputs[:,:9], # mean predictions on the two parameters
+                'sigma': outputs[:,9:18], # uncertainties on the two parameters
             }
         elif self.loss=='Quantile':
             return {
-                'mean': outputs[:,:2], # mean predictions on the two parameters
-                'q25':  outputs[:,2:4],
-                'q75':  outputs[:,4:6],
+                'mean': outputs[:,:9], # mean predictions on the two parameters
+                'q25':  outputs[:,9:18],
+                'q75':  outputs[:,18:27],
             }
         else:
             msg = f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'."
@@ -172,18 +180,31 @@ class SSMRegression():
             raise ValueError(msg)
         return loss_fn
 
+    def stack_inputs_targets(self, vals):
+        h1, l1, params, idx = vals
+        mass_1 = params['mass_1'].to(self.device)
+        mass_2 = params['mass_2'].to(self.device)
+        chirp_mass = (mass_1 * mass_2)**(3/5) / (mass_1 + mass_2)**(1/5)
+        mass_ratio = mass_2 / mass_1
+        total_mass = mass_1 + mass_2
+        right_ascension = params['ra'].to(self.device)
+        declination = params['dec'].to(self.device)
+        redshift = params['redshift'].to(self.device)
+        theta_jn = params['theta_jn'].to(self.device)
+
+        inputs = torch.stack([h1.to(self.device), l1.to(self.device)], dim=2)
+        targets = torch.stack([mass_1, mass_2,
+                               chirp_mass, mass_ratio, total_mass,
+                               right_ascension, declination, redshift, theta_jn], dim=1)
+        return inputs, targets
+
     # Training
     def train(self):
         self.model.train()
         train_loss = 0
         pbar = tqdm(enumerate(self.train_data_loader))
         for batch_idx, vals in pbar:
-            h1, l1, params, idx = vals
-            mass_1 = params['mass_1'].to(self.device)
-            mass_2 = params['mass_2'].to(self.device)
-            chirp_mass = (mass_1 * mass_2)**(3/5) / (mass_1 + mass_2)**(1/5)
-            inputs = h1.unsqueeze(-1).to(self.device)
-            targets = torch.stack([mass_1, chirp_mass], dim=1)
+            inputs, targets = self.stack_inputs_targets(vals)
             self.optimizer.zero_grad()
 
             preds = self.model(inputs)
@@ -207,18 +228,12 @@ class SSMRegression():
         with torch.no_grad():
             pbar = tqdm(enumerate(self.val_data_loader))
             for batch_idx, vals in pbar:
-                h1, l1, params, idx = vals
-                mass_1 = params['mass_1'].to(self.device)
-                mass_2 = params['mass_2'].to(self.device)
-                chirp_mass = (mass_1 * mass_2)**(3/5) / (mass_1 + mass_2)**(1/5)
-                inputs = h1.unsqueeze(-1).to(self.device)
-                targets = torch.stack([mass_1, chirp_mass], dim=1)
-                
+                inputs, targets = self.stack_inputs_targets(vals)
                 preds = self.model(inputs)
                 outputs = self.split_outputs(preds)
+
                 # Compute loss
                 loss = self.compute_loss(outputs, targets)
-
                 eval_loss += loss.item()
 
                 pbar.set_description(
@@ -276,8 +291,6 @@ if __name__=='__main__':
             'dropout': task.dropout,
             'prenorm': task.prenorm,
             'device': str(task.device),
-            'train_data_size': len(task.train_data),
-            'val_data_size': len(task.val_data),
             'train_batch_size': task.TRAIN_BATCH_SIZE,
             'val_batch_size': task.VAL_BATCH_SIZE,
             'modeldir': task.modeldir,
@@ -291,4 +304,6 @@ if __name__=='__main__':
 
     wandb.finish()
 
-    torch.save(task.model.state_dict(), os.path.join(task.modeldir, f'model.SSM.{task.datatype}.{task.loss}.{timestamp}.path'))
+    save_path = os.path.join(task.modeldir, f'ssm_{task.datatype}_{timestamp}.pt')
+    torch.save(task.model.state_dict(), save_path)
+    logger.info(f'Model saved to {save_path}')
