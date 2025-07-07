@@ -1,37 +1,49 @@
 import logging
-import os
+import os, sys
 from tqdm.auto import tqdm
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import numpy as np
+
+sys.path.append('/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/modules')
 from models import S4Model
 from losses import QuantileLoss
 
 logger = logging.getLogger('ssm_regression')
 
 class SSMRegression():
+    def __raise__(self, msg, exc_type=Exception):
+        logging.error(msg)
+        raise exc_type(msg)
+
     def __init__(
         self,
-        d_input=1,
+        d_input=2,
+        d_output=18,
         d_model=6,
         n_layers=4,
         dropout=0.0,
+        train_batch_size=100,
+        val_batch_size=100,
         prenorm=False,
         device=None,
-        datatype='SHO', # 'SineGaussian', 'SHO', or 'LIGO'
-        datasfx='', # suffix for the dataset, e.g., '_sigma0.4_gaussian'
+        datatype='BNS', # 'BNS'
+        hdf5_path='', # path to the HDF5 dataset
+        split_indices_file='', # path to precomputed split indices file
+        # If split_indices_file is empty, it will compute indices on the fly
+        # and save them to 'bns_data_indices.npz' in the current directory.
+        # If you want to use precomputed indices, provide the path to the .npz
+        # file containing 'train_indices', 'val_indices', and 'test_indices'.
+        # If you want to use the default split, set split_indices_file to ''.
         loss='NLLGaussian', # 'NLLGaussian', 'Quantile'
     ):
         # Load datasets
-        if datatype=='SineGaussian':
-            from data_sinegaussian import DataGenerator
-        elif datatype=='SHO':
-            from data_sho import DataGenerator
-        elif datatype=='LIGO':
-            pass # TODO: implement LIGO data loading
+        if datatype=='BNS':
+            from data_bns import get_dataloaders
+        else:
+            self.__raise__(f'Unsupported datatype: {datatype}', exc_type=ValueError)
 
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -39,7 +51,8 @@ class SSMRegression():
             self.device = torch.device(device)
         logger.info(f"Using device={self.device}")
 
-        self.d_input = d_input # number of channels (here only one time series -> 1)
+        self.d_input = d_input # number of channels
+        self.d_output = d_output
         self.d_model = d_model
         self.n_layers = n_layers
         self.dropout = dropout
@@ -49,41 +62,25 @@ class SSMRegression():
 
         self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
         self.modeldir = os.path.join(self.datadir, 'output')
+        if not os.path.exists(self.modeldir):
+            os.makedirs(self.modeldir)
+            logger.info(f'Created model directory: {self.modeldir}')
 
-        self.train_dict = torch.load(os.path.join(self.datadir, f'train{datasfx}.pt'), map_location=self.device, weights_only=True)
-        self.val_dict = torch.load(os.path.join(self.datadir, f'val{datasfx}.pt'), map_location=self.device, weights_only=True)
+        self.TRAIN_BATCH_SIZE = train_batch_size
+        self.VAL_BATCH_SIZE = val_batch_size
 
-        self.train_data = DataGenerator(self.train_dict)
-        self.val_data = DataGenerator(self.val_dict)
-
-        self.TRAIN_BATCH_SIZE = 1000
-        self.VAL_BATCH_SIZE = 1000
-
-        self.train_data_loader = DataLoader(
-            self.train_data, batch_size=self.TRAIN_BATCH_SIZE,
-            shuffle=True
-        )
-        self.val_data_loader = DataLoader(
-            self.val_data, batch_size=self.VAL_BATCH_SIZE,
-            shuffle=True
+        self.train_data_loader, self.val_data_loader, _ = get_dataloaders(
+            hdf5_path=hdf5_path,
+            train_batch_size=self.TRAIN_BATCH_SIZE,
+            val_batch_size=self.VAL_BATCH_SIZE,
+            train_split=0.8,
+            test_split=0.1,
+            split_indices_file=split_indices_file,
+            random_seed=42
         )
 
         self.model = None
         self.optimizer, self.scheduler = None, None
-
-    def reshaping(self, batch, input_dim=1, output_dim=2):
-        theta_u, theta_s, data_u, data_s, \
-        data_clean_u, data_noise_u, data_clean_s, data_noise_s, \
-        t_vals, event_id = batch
-
-        # remove repeat (take only first repeat for unshifted data)
-        if input_dim==1:
-            inputs = data_u[:, 0, :].unsqueeze(-1) if data_u.ndim == 3 else data_u.unsqueeze(-1)  # [B, 200, input_dim]
-        else:
-            inputs = data_u[:, 0, :input_dim] if data_u.ndim == 3 else data_u[:, :input_dim]
-        targets = theta_u[:, 0, :output_dim] if theta_u.ndim == 3 else theta_u[:, :output_dim]  # [B, output_dim]
-
-        return inputs, targets
 
     def build_model(self):
         """
@@ -91,9 +88,12 @@ class SSMRegression():
         """
         logger.info('==> Building S4 model...')
         # Define the model
-        self.model = S4Model(d_input=self.d_input, loss=self.loss, d_model=self.d_model,
-                        n_layers=self.n_layers, dropout=self.dropout, prenorm=self.prenorm)
+        self.model = S4Model(d_input=self.d_input, d_output=self.d_output, loss=self.loss,
+                             d_model=self.d_model, n_layers=self.n_layers, dropout=self.dropout,
+                             prenorm=self.prenorm)
         self.model = self.model.to(self.device)
+        # Requires setup with torch.distributed.launch or torchrun
+        # self.model = torch.nn.parallel.DistributedDataParallel(self.model)
         logger.info('...done!')
 
         # Count parameters
@@ -135,21 +135,21 @@ class SSMRegression():
 
     def split_outputs(self, outputs):
         """
-        If loss is 'NLLGaussian', outputs are of shape (B, 4) with mean and uncertainties.
-        If loss is 'Quantile', outputs are of shape (B, 6) with mean, q25, and q75.
-        Split model output of shape (B, 6) into mean, 25% quantile, and 75% quantile predictions.
-        Returns a dict with 'mean', 'q25', and 'q75' tensors each of shape (B, 2).
+        Outputs are of shape (B, 18) with mean and uncertainties.
+        If loss is 'Quantile', outputs are of shape (B, 27) with mean, q25, and q75.
+        Split model output of shape (B, 27) into mean, 25% quantile, and 75% quantile predictions.
+        Returns a dict with 'mean', 'q25', and 'q75' tensors each of shape (B, 27).
         """
         if self.loss == 'NLLGaussian':
             return {
-                'mean': outputs[:,:2], # mean predictions on the two parameters
-                'sigma': outputs[:,2:4], # uncertainties on the two parameters
+                'mean': outputs[:,:9], # mean predictions on the two parameters
+                'sigma': outputs[:,9:18], # uncertainties on the two parameters
             }
         elif self.loss=='Quantile':
             return {
-                'mean': outputs[:,:2], # mean predictions on the two parameters
-                'q25':  outputs[:,2:4],
-                'q75':  outputs[:,4:6],
+                'mean': outputs[:,:9], # mean predictions on the two parameters
+                'q25':  outputs[:,9:18],
+                'q75':  outputs[:,18:27],
             }
         else:
             msg = f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'."
@@ -180,14 +180,31 @@ class SSMRegression():
             raise ValueError(msg)
         return loss_fn
 
+    def stack_inputs_targets(self, vals):
+        h1, l1, params, idx = vals
+        mass_1 = params['mass_1'].to(self.device)
+        mass_2 = params['mass_2'].to(self.device)
+        chirp_mass = (mass_1 * mass_2)**(3/5) / (mass_1 + mass_2)**(1/5)
+        mass_ratio = mass_2 / mass_1
+        total_mass = mass_1 + mass_2
+        right_ascension = params['ra'].to(self.device)
+        declination = params['dec'].to(self.device)
+        redshift = params['redshift'].to(self.device)
+        theta_jn = params['theta_jn'].to(self.device)
+
+        inputs = torch.stack([h1.to(self.device), l1.to(self.device)], dim=2)
+        targets = torch.stack([mass_1, mass_2,
+                               chirp_mass, mass_ratio, total_mass,
+                               right_ascension, declination, redshift, theta_jn], dim=1)
+        return inputs, targets
+
     # Training
     def train(self):
         self.model.train()
         train_loss = 0
         pbar = tqdm(enumerate(self.train_data_loader))
         for batch_idx, vals in pbar:
-            inputs, targets = self.reshaping(vals, output_dim=2)
-            inputs, targets = inputs.to(self.device), targets.to(self.device)
+            inputs, targets = self.stack_inputs_targets(vals)
             self.optimizer.zero_grad()
 
             preds = self.model(inputs)
@@ -211,14 +228,12 @@ class SSMRegression():
         with torch.no_grad():
             pbar = tqdm(enumerate(self.val_data_loader))
             for batch_idx, vals in pbar:
-                inputs, targets = self.reshaping(vals)
-                inputs, targets = inputs.to(self.device), targets.to(self.device)
-                
+                inputs, targets = self.stack_inputs_targets(vals)
                 preds = self.model(inputs)
                 outputs = self.split_outputs(preds)
+
                 # Compute loss
                 loss = self.compute_loss(outputs, targets)
-
                 eval_loss += loss.item()
 
                 pbar.set_description(
@@ -233,7 +248,11 @@ if __name__=='__main__':
     import wandb
     from datetime import datetime
 
-    task = SSMRegression(d_model=12, n_layers=8, datatype='SineGaussian', loss='NLLGaussian')
+    task = SSMRegression(d_model=6, n_layers=4, datatype='BNS', loss='NLLGaussian',
+                         train_batch_size=100, val_batch_size=100,
+                         device='cuda',
+                         hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
+                         split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')  # Use precomputed indices file
     task.build_model()
     task.setup_optimizer(lr=0.001, weight_decay=0.01)
 
@@ -241,7 +260,7 @@ if __name__=='__main__':
 
     wandb.init(project=f'ssm_{task.datatype}_regression', name=f'ssm_{task.datatype}_{timestamp}')
 
-    EPOCHS = 240
+    EPOCHS = 100
 
     pbar = tqdm(range(task.start_epoch, EPOCHS))
     for epoch_number in pbar:
@@ -272,8 +291,6 @@ if __name__=='__main__':
             'dropout': task.dropout,
             'prenorm': task.prenorm,
             'device': str(task.device),
-            'train_data_size': len(task.train_data),
-            'val_data_size': len(task.val_data),
             'train_batch_size': task.TRAIN_BATCH_SIZE,
             'val_batch_size': task.VAL_BATCH_SIZE,
             'modeldir': task.modeldir,
@@ -287,4 +304,6 @@ if __name__=='__main__':
 
     wandb.finish()
 
-    torch.save(task.model.state_dict(), os.path.join(task.modeldir, f'model.SSM.{task.datatype}.{task.loss}.{timestamp}.path'))
+    save_path = os.path.join(task.modeldir, f'ssm_{task.datatype}_{timestamp}.pt')
+    torch.save(task.model.state_dict(), save_path)
+    logger.info(f'Model saved to {save_path}')
