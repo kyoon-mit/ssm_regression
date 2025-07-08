@@ -19,7 +19,7 @@ def main():
 
     script_content = f'''#!/bin/bash
 sleep $(( RANDOM % 91 ))
-source /work/submit/kyoon/miniforge3/etc/profile.d/conda.sh
+source $(conda info --base)/etc/profile.d/conda.sh
 conda activate ssm
 BASE_DIR="{ssm_dir}"
 MODEL_DIR="{model_dir}"
