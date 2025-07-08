@@ -10,7 +10,8 @@ import corner
 from matplotlib.patches import Patch
 
 import sys
-sys.path.append('/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/modules')
+from pathlib import Path
+sys.path.append(os.path.join(Path(__file__).resolve().parent.parent, 'modules'))
 
 print(sys.executable)
 print(torch.__version__)
@@ -113,7 +114,7 @@ class Plotter:
         Supported losses are 'NLLGaussian' and 'Quantile'.
         """
         if loss == 'NLLGaussian':
-            criterion = nn.GaussianNLLLoss(reduction=reduction, full=False, eps=1e-7)
+            criterion = nn.GaussianNLLLoss(reduction=reduction, full=True, eps=1e-7)
             outputs = {
                 'mean': preds[:,:9],
                 'sigma': preds[:,9:18],
@@ -353,7 +354,7 @@ class Plotter:
             figure_z_scores.show()
 
         print(f'Saved SSM predictions plots to {self.save_path}')
-        print(f'SSM predictions computed with loss={loss}')
+        print(f'SSM predictions computed with {loss=}')
 
         return
 
@@ -390,9 +391,9 @@ class Plotter:
             print(f'Loaded combined dataframe from {parquet_name} with shape {combined_df.shape}')
 
 if __name__ == "__main__":
-    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.250707140714.path'
+    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.250707141027.path'
     plotter = Plotter(datatype='BNS',
                       hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
                       split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')
-    plotter.plot_ssm_predictions(d_input=2, d_model=2, n_layers=1, batch_size=256,
+    plotter.plot_ssm_predictions(d_input=2, d_model=4, n_layers=4, batch_size=256,
                                  model_path=model_path, csv_output=True)

@@ -1,13 +1,17 @@
 import logging
-import os, sys
+import os
 from tqdm.auto import tqdm
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
+torch.cuda.empty_cache()
 
-sys.path.append('/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/modules')
+import sys
+from pathlib import Path
+sys.path.append(os.path.join(Path(__file__).resolve().parent.parent, 'modules'))
+
 from models import S4Model
 from losses import QuantileLoss
 
@@ -60,7 +64,7 @@ class SSMRegression():
         self.datatype = datatype
         self.loss = loss
 
-        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
+        self.datadir = os.path.join(Path(__file__).resolve().parent.parent.parent, self.datatype)
         self.modeldir = os.path.join(self.datadir, 'output')
         if not os.path.exists(self.modeldir):
             os.makedirs(self.modeldir)
@@ -142,12 +146,12 @@ class SSMRegression():
         """
         if self.loss == 'NLLGaussian':
             return {
-                'mean': outputs[:,:9], # mean predictions on the two parameters
-                'sigma': outputs[:,9:18], # uncertainties on the two parameters
+                'mean': outputs[:,:9],
+                'sigma': outputs[:,9:18],
             }
         elif self.loss=='Quantile':
             return {
-                'mean': outputs[:,:9], # mean predictions on the two parameters
+                'mean': outputs[:,:9],
                 'q25':  outputs[:,9:18],
                 'q75':  outputs[:,18:27],
             }
@@ -282,7 +286,7 @@ if __name__=='__main__':
             'doc_val': task.doc_val,
             'model': task.model.state_dict(),
             'best_loss': task.best_loss,
-            'timestamp': timestamp,
+            'str_timestamp': timestamp, # timestamp in str format
             'datatype': task.datatype,
             'loss': task.loss,
             'd_input': task.d_input,
