@@ -10,6 +10,7 @@ import corner
 from matplotlib.patches import Patch
 
 import sys
+sys.path.append('/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/modules')
 
 print(sys.executable)
 print(torch.__version__)
@@ -28,13 +29,15 @@ class Plotter:
         print(f'Using device={self.device}')
 
         # Load datasets
+        global get_dataloaders
         if datatype == 'BNS':
             from data_bns import get_dataloaders
         else:
             raise ValueError(f'Unknown datatype: {datatype}')
         self.datatype = datatype
         self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{datatype}'
-        self.test_data_loader = get_dataloaders(
+        self.hdf5_path = hdf5_path
+        _, _, self.test_data_loader = get_dataloaders(
             hdf5_path=hdf5_path,
             test_batch_size=1,
             train_split=0.8,
@@ -47,7 +50,12 @@ class Plotter:
         if not os.path.exists(self.save_path):
             os.makedirs(self.save_path, exist_ok=True)
             print(f'Created save path: {self.save_path}')
-        
+
+        self.param_list = ['mass_1', 'mass_2', 'chirp_mass', 'mass_ratio',
+            'total_mass', 'right_ascension', 'declination', 'redshift', 'theta_jn']
+        self.param_latex = [r'$m_1$', r'$m_2$', r'$\mathcal{M}$', r'$q$',
+            r'$M$', r'$\alpha$', r'$\delta$', r'$z$', r'$\theta_{\mathrm{JN}}$']
+
         # Placeholders
         self.ssm_model = nn.Module()
 
@@ -95,29 +103,38 @@ class Plotter:
 
         df = pd.DataFrame(outputs)
         df.to_csv(os.path.join(self.save_path, filename), index=False)
-        print(f'Saved outputs to {filename}')
+        print(f'Dumped results to {filename}')
         return df
 
     # Define loss function
-    def compute_loss(self, outputs, targets, reduction='none'):
+    def compute_loss(self, preds, targets, loss, reduction='none'):
         """
         Define the loss function based on the specified loss type.
         Supported losses are 'NLLGaussian' and 'Quantile'.
         """
-        if self.loss == 'NLLGaussian':
+        if loss == 'NLLGaussian':
             criterion = nn.GaussianNLLLoss(reduction=reduction, full=False, eps=1e-7)
+            outputs = {
+                'mean': preds[:,:9],
+                'sigma': preds[:,9:18],
+            }
             loss_fn = criterion(outputs['mean'], targets, outputs['sigma'])
-        elif self.loss == 'Quantile':
+        elif loss == 'Quantile':
             from losses import QuantileLoss
             mean_loss = nn.MSELoss(reduction=reduction)
             q25_loss = QuantileLoss(quantile=0.25, reduction=reduction)
             q75_loss = QuantileLoss(quantile=0.75, reduction=reduction)
+            outputs = {
+                'mean': outputs[:,:9],
+                'q25':  outputs[:,9:18],
+                'q75':  outputs[:,18:27],
+            }
             loss_fn = (
                 mean_loss(outputs['mean'], targets) +
                 q25_loss(outputs['q25'], targets) +
                 q75_loss(outputs['q75'], targets)
             )
-        else: raise ValueError(f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'.")
+        else: raise ValueError(f"Unknown loss type: {loss}. Supported losses are 'NLLGaussian' and 'Quantile'.")
         return loss_fn
 
     def stack_inputs_truths(self, vals):
@@ -152,25 +169,21 @@ class Plotter:
 
         Returns:
             dict: Dictionary containing predictions and truths.
-        """
-        param_list = ['mass_1', 'mass_2', 'chirp_mass', 'mass_ratio',
-            'total_mass', 'right_ascension', 'declination',
-            'redshift', 'theta_jn']
-        
-        def dinit():
-            l =  param_list
-            d = {k: [] for k in l}
+        """        
+        def dinit(prefix):
+            l =  self.param_list
+            d = {f'{prefix}_{k}': [] for k in l}
             return d
         
         def maketensor(d):
             return {k: torch.tensor(v) for k, v in d.items()}
         
-        pred_dict, truth_dict = dinit(), dinit()
+        pred_dict, truth_dict = dinit('pred'), dinit('truth')
         loss_per_sample = []
         if loss=='NLLGaussian':
-            pred_sigma_dict = dinit()
+            pred_sigma_dict = dinit('sigma')
         elif loss=='Quantile':
-            pred_q25_dict, pred_q75_dict = dinit(), dinit()
+            pred_q25_dict, pred_q75_dict = dinit('q25'), dinit('q75')
         else:
             raise ValueError(f'Unknown loss function: {loss}')
 
@@ -180,17 +193,22 @@ class Plotter:
         ssm_model.eval()
 
         # Redefine the test data loader to iterate over batches
-        self.test_data_loader = DataLoader(
-            self.test_data, batch_size=batch_size, num_workers=0,
-            shuffle=False)
+        _, _, test_data_loader = get_dataloaders(
+            hdf5_path=self.hdf5_path,
+            test_batch_size=batch_size,
+            train_split=0.8,
+            test_split=0.1,
+            split_indices_file='',  # No precomputed indices file
+            random_seed=42
+        )
 
-        for idx, vals in enumerate(self.test_data_loader):
+        for idx, vals in enumerate(test_data_loader):
             inputs, truths = self.stack_inputs_truths(vals)
             batch_contexts.append(inputs) # shape: (B, 2, length of sequence)
             batch_truths.append(truths)   # shape: (B, 9)
 
             # Process in batches
-            if (idx + 1) % batch_size == 0 or (idx + 1) == len(self.test_data_loader):
+            if (idx + 1) % batch_size == 0 or (idx + 1) == len(test_data_loader):
                 contexts = torch.cat(batch_contexts, dim=0).to(device) # (B, 2, length of sequence)
                 truths = torch.cat(batch_truths).to(device)            # (B, 9)
 
@@ -203,18 +221,23 @@ class Plotter:
                 # Move samples to CPU if required
                 if compute_on_cpu:
                     preds = preds.cpu()
-                    truths = truths.cpu()                       # (B, 2)
+                    truths = truths.cpu()
                 
-                for i in range(param_list):
-                    p = param_list[i]
-                    pred_dict[p].extend(preds[:, i].tolist())
-                    truth_dict[p].extend(truths[:, i].tolist())
+                for i in range(len(self.param_list)):
+                    p = self.param_list[i]
+                    pred_dict[f'pred_{p}'].extend(preds[:, i].tolist())
+                    truth_dict[f'truth_{p}'].extend(truths[:, i].tolist())
                     if loss=='NLLGaussian':
-                        pred_sigma_dict[p].extend(preds[:, i+len(param_list)].tolist())
+                        pred_sigma_dict[f'sigma_{p}'].extend(preds[:, i+len(self.param_list)].tolist())
                     elif loss=='Quantile':
-                        pred_q25_dict[p].extend(preds[:, i+len(param_list)].tolist())
-                        pred_q75_dict[p].extend(preds[:, i+2*len(param_list)].tolist())
-                loss_per_sample.extend(self.compute_loss(preds, truths, reduction='none').tolist())
+                        pred_q25_dict[f'q25_{p}'].extend(preds[:, i+len(self.param_list)].tolist())
+                        pred_q75_dict[f'q75_{p}'].extend(preds[:, i+2*len(self.param_list)].tolist())
+                l = self.compute_loss(preds, truths, loss=loss, reduction='none')
+                print(l.shape)
+                l = l.mean(dim=1, keepdim=True)
+                print(l.shape)
+                l = l.tolist()
+                loss_per_sample.extend(l)
 
                 # Clear for next batch
                 batch_contexts.clear()
@@ -223,6 +246,8 @@ class Plotter:
         return_dict = {'loss_per_sample': torch.tensor(loss_per_sample)}
         return_dict.update(maketensor(pred_dict))
         return_dict.update(maketensor(truth_dict))
+        print(return_dict)
+
         if loss=='NLLGaussian':
             return_dict.update(maketensor(pred_sigma_dict))
         elif loss=='Quantile':
@@ -230,7 +255,8 @@ class Plotter:
             return_dict.update(maketensor(pred_q75_dict))
 
         if csv_output:
-            self.dump_to_csv(return_dict, filename=f'ssm_{self.datatype}_{loss}{timestamp}_outputs.csv')
+            csv_name = f'ssm_{self.datatype}_{loss}{timestamp}_outputs.csv'
+            self.dump_to_csv(return_dict, filename=csv_name)
 
         return return_dict
 
@@ -243,7 +269,7 @@ class Plotter:
         else: raise ValueError(f'Unknown loss function: {loss}')
         if not model_path or not os.path.exists(model_path):
             raise ValueError(f"Model path '{model_path}' does not exist or was not provided.")
-        self.ssm_model = S4Model(d_input=d_input, d_output=d_output, d_model=d_model, n_layers=n_layers, dropout=0.0, prenorm=False)
+        self.ssm_model = S4Model(d_input=d_input, d_output=d_output, d_model=d_model, loss=loss, n_layers=n_layers, dropout=0.0, prenorm=False)
         self.ssm_model = self.ssm_model.to(self.device)
         self.ssm_model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
         self.ssm_model.eval()
@@ -251,58 +277,37 @@ class Plotter:
         ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=batch_size,
                                             compute_on_cpu=False, csv_output=csv_output, timestamp=timestamp)
 
-        """
         # Get differences between predictions and truths
-        param1_diff, param1_z_score = self.compute_z_scores(ssm_outputs['pred_param1'], torch.ones_like(ssm_outputs['pred_param1']), ssm_outputs['truth_param1'])
-        param2_diff, param2_z_score = self.compute_z_scores(ssm_outputs['pred_param2'], torch.ones_like(ssm_outputs['pred_param2']), ssm_outputs['truth_param2'])
-        ssm_diffs = {
-            'param1_diff': param1_diff,
-            'param2_diff': param2_diff,
-        }
-        ssm_z_scores = {
-            'param1_z_score': param1_z_score,
-            'param2_z_score': param2_z_score,
-        }
-
-        # Stack into (N, 2) array
-        ssm_diffs_stacked = np.stack(
-            [ssm_diffs['param1_diff'].numpy(), ssm_diffs['param2_diff'].numpy()],
-            axis=1
-        )
-        ssm_z_scores_stacked = np.stack(
-            [ssm_z_scores['param1_z_score'].numpy(), ssm_z_scores['param2_z_score'].numpy()],
-            axis=1
-        )
+        ssm_diffs, ssm_z_scores, ssm_uncertainties = [], [], []
+        labels_diffs, labels_z_scores, labels_uncertainties = [], [], []
+        for i in range(len(self.param_list)):
+            param, platex = self.param_list[i], self.param_latex[i]
+            diff, z_score = self.compute_z_scores(ssm_outputs[f'pred_{param}'], torch.ones_like(ssm_outputs[f'pred_{param}']), ssm_outputs[f'truth_{param}'])
+            ssm_diffs.append(diff.numpy())
+            ssm_z_scores.append(z_score.numpy())
+            if loss=='NLLGaussian':
+                uncertainty = ssm_outputs[f'sigma_{param}']
+            elif loss=='Quantile':
+                uncertainty = ssm_outputs[f'q75_{param}'] - ssm_outputs[f'q25_{param}']
+            else:
+                raise ValueError(f'Invalid {loss=}.')
+            ssm_uncertainties.append(uncertainty.numpy())
+            labels_diffs.append(fr'$\hat{platex} - {platex}$')
+            labels_z_scores.append(fr'$(\hat{platex} - {platex})/\sigma_{platex}$')
+            labels_uncertainties.append(fr'$\sigma_{platex}')
+        ssm_diffs_stacked, ssm_z_scores_stacked, ssm_uncertainties_stacked =\
+            np.stack(ssm_diffs, axis=1), np.stack(ssm_z_scores, axis=1), np.stack(ssm_uncertainties, axis=1)
+        
         # Get loss per sample
         loss_per_sample = ssm_outputs['loss_per_sample'].numpy()
 
-        # Get uncertainties
-        if loss == 'NLLGaussian':
-            uncertainties_stacked = np.sqrt(
-                np.stack(
-                    [ssm_outputs['pred_sigma1'].numpy(), ssm_outputs['pred_sigma2'].numpy()],
-                    axis=1
-                )
-            )
-        elif loss == 'Quantile':
-            uncertainties_stacked = np.stack(
-                [ssm_outputs['pred_q75_1'].numpy() - ssm_outputs['pred_q25_1'].numpy(),
-                 ssm_outputs['pred_q75_2'].numpy() - ssm_outputs['pred_q25_2'].numpy()],
-                axis=1
-            )
-
-        # Prepare labels for the plots
-        if self.datatype == 'SHO':
-            labels_diffs = [r'$\hat{\omega}_0 - \omega_0$', r'$\hat{\beta} - \beta$']
-            labels_uncertainties = [r'$\hat{\sigma}_{\omega_0}$', r'$\hat{\sigma}_{\beta}$']
-        elif self.datatype == 'SineGaussian':
-            labels_diffs = [r'$\hat{f}_0 - f_0$', r'$\hat{\tau} - \tau$']
-            labels_uncertainties = [r'$\hat{\sigma}_{f_0}$', r'$\hat{\sigma}_{\tau}$']
-        labels_z_scores = [f'({labels_diffs[i]})/{labels_uncertainties[i]}' for i in range(len(labels_diffs))]
+        print('ssm_uncertainties_stacked shape:', ssm_uncertainties_stacked.shape)
+        print('min per column:', ssm_uncertainties_stacked.min(axis=0))
+        print('max per column:', ssm_uncertainties_stacked.max(axis=0))
 
         # Plot uncertainties
         figure_uncertainties = corner.corner(
-            uncertainties_stacked,
+            ssm_uncertainties_stacked,
             labels=labels_uncertainties,
             quantiles=[0.16, 0.5, 0.84],
             show_titles=True,
@@ -368,7 +373,6 @@ class Plotter:
 
         print(f'Saved SSM predictions plots to {self.save_path}')
         print(f'SSM predictions computed with loss={loss}')
-        """
 
         return
 
@@ -405,9 +409,9 @@ class Plotter:
             print(f'Loaded combined dataframe from {parquet_name} with shape {combined_df.shape}')
 
 if __name__ == "__main__":
-    model_path = '' # TODO
+    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.250707140714.path'
     plotter = Plotter(datatype='BNS',
                       hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
                       split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')
-    plotter.plot_ssm_predictions(d_input=1, d_model=2, n_layers=1,
-                                 model_path=model_path)
+    plotter.plot_ssm_predictions(d_input=2, d_model=2, n_layers=1,
+                                 model_path=model_path, csv_output=True)
