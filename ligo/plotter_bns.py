@@ -187,8 +187,6 @@ class Plotter:
         else:
             raise ValueError(f'Unknown loss function: {loss}')
 
-        batch_contexts, batch_truths = [], []
-
         device = next(ssm_model.parameters()).device
         ssm_model.eval()
 
@@ -202,51 +200,38 @@ class Plotter:
             random_seed=42
         )
 
-        for idx, vals in enumerate(test_data_loader):
+        for _, vals in enumerate(test_data_loader):
             inputs, truths = self.stack_inputs_truths(vals)
-            batch_contexts.append(inputs) # shape: (B, 2, length of sequence)
-            batch_truths.append(truths)   # shape: (B, 9)
+            inputs = inputs.to(device) # (B, length of sequence, 2)
+            truths = truths.to(device) # (B, 9)
 
-            # Process in batches
-            if (idx + 1) % batch_size == 0 or (idx + 1) == len(test_data_loader):
-                contexts = torch.cat(batch_contexts, dim=0).to(device) # (B, 2, length of sequence)
-                truths = torch.cat(batch_truths).to(device)            # (B, 9)
+            with torch.no_grad():
+                preds = ssm_model(inputs)
 
-                with torch.no_grad():
-                    preds = ssm_model(contexts)
+            if preds.ndim == 3:
+                preds = preds.squeeze(2)  # e.g., (B, N, 2) → (B, N)
 
-                if preds.ndim == 3:
-                    preds = preds.squeeze(1)  # e.g., (B, 2, N) → (B, N)
-
-                # Move samples to CPU if required
-                if compute_on_cpu:
-                    preds = preds.cpu()
-                    truths = truths.cpu()
-                
-                for i in range(len(self.param_list)):
-                    p = self.param_list[i]
-                    pred_dict[f'pred_{p}'].extend(preds[:, i].tolist())
-                    truth_dict[f'truth_{p}'].extend(truths[:, i].tolist())
-                    if loss=='NLLGaussian':
-                        pred_sigma_dict[f'sigma_{p}'].extend(preds[:, i+len(self.param_list)].tolist())
-                    elif loss=='Quantile':
-                        pred_q25_dict[f'q25_{p}'].extend(preds[:, i+len(self.param_list)].tolist())
-                        pred_q75_dict[f'q75_{p}'].extend(preds[:, i+2*len(self.param_list)].tolist())
-                l = self.compute_loss(preds, truths, loss=loss, reduction='none')
-                print(l.shape)
-                l = l.mean(dim=1, keepdim=True)
-                print(l.shape)
-                l = l.tolist()
-                loss_per_sample.extend(l)
-
-                # Clear for next batch
-                batch_contexts.clear()
-                batch_truths.clear()
+            # Move samples to CPU if required
+            if compute_on_cpu:
+                preds = preds.cpu()
+                truths = truths.cpu()
+            
+            for i in range(len(self.param_list)):
+                p = self.param_list[i]
+                pred_dict[f'pred_{p}'].extend(preds[:, i].tolist())
+                truth_dict[f'truth_{p}'].extend(truths[:, i].tolist())
+                if loss=='NLLGaussian':
+                    pred_sigma_dict[f'sigma_{p}'].extend(preds[:, i+len(self.param_list)].tolist())
+                elif loss=='Quantile':
+                    pred_q25_dict[f'q25_{p}'].extend(preds[:, i+len(self.param_list)].tolist())
+                    pred_q75_dict[f'q75_{p}'].extend(preds[:, i+2*len(self.param_list)].tolist())
+            l = self.compute_loss(preds, truths, loss=loss, reduction='none')
+            l = l.mean(dim=1, keepdim=False).tolist() # List of length B
+            loss_per_sample.extend(l)
 
         return_dict = {'loss_per_sample': torch.tensor(loss_per_sample)}
         return_dict.update(maketensor(pred_dict))
         return_dict.update(maketensor(truth_dict))
-        print(return_dict)
 
         if loss=='NLLGaussian':
             return_dict.update(maketensor(pred_sigma_dict))
@@ -300,10 +285,6 @@ class Plotter:
         
         # Get loss per sample
         loss_per_sample = ssm_outputs['loss_per_sample'].numpy()
-
-        print('ssm_uncertainties_stacked shape:', ssm_uncertainties_stacked.shape)
-        print('min per column:', ssm_uncertainties_stacked.min(axis=0))
-        print('max per column:', ssm_uncertainties_stacked.max(axis=0))
 
         # Plot uncertainties
         figure_uncertainties = corner.corner(
@@ -413,5 +394,5 @@ if __name__ == "__main__":
     plotter = Plotter(datatype='BNS',
                       hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
                       split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')
-    plotter.plot_ssm_predictions(d_input=2, d_model=2, n_layers=1,
+    plotter.plot_ssm_predictions(d_input=2, d_model=2, n_layers=1, batch_size=256,
                                  model_path=model_path, csv_output=True)
