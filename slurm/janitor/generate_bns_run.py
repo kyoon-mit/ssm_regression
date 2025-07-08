@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse
+import argparse, os
 from pathlib import Path
 
 def main():
@@ -12,6 +12,8 @@ def main():
     print(args)
 
     script_dir = Path(__file__).resolve().parent.parent
+    ssm_dir = script_dir.parent
+    model_dir = os.path.join(ssm_dir.parent, 'models')
     bash_dir = script_dir / 'bash_scripts'
     filename = bash_dir / f'bns_run_regression_d{args.d_model}_n{args.n_layers}.sh'
 
@@ -19,8 +21,8 @@ def main():
 sleep $(( RANDOM % 91 ))
 source /work/submit/kyoon/miniforge3/etc/profile.d/conda.sh
 conda activate ssm
-BASE_DIR='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression'
-MODEL_DIR='/ceph/submit/data/user/k/kyoon/KYoonStudy/models'
+BASE_DIR="{ssm_dir}"
+MODEL_DIR="{model_dir}"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 python ${{BASE_DIR}}/ligo/call_regression_bns.py -t BNS \\
 --hdf5-path ${{MODEL_DIR}}/BNS/bns_waveforms.hdf5 \\
@@ -31,8 +33,8 @@ python ${{BASE_DIR}}/ligo/call_regression_bns.py -t BNS \\
 --d_model {args.d_model} \\
 --n_layers {args.n_layers} \\
 --loss NLLGaussian \\
---logfile='${{BASE_DIR}}/slurm/logs/bns_regression.log' \\
---comment='BNS injection (20000 samples); loss=NLLGaussian; d_model={args.d_model}, n_layers={args.n_layers}'
+--logfile="${{BASE_DIR}}/slurm/logs/bns_regression.log" \\
+--comment="BNS injection (20000 samples); loss=NLLGaussian; d_model={args.d_model}, n_layers={args.n_layers}"
 '''
 
     with open(filename, 'w') as f:
