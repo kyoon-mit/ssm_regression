@@ -230,7 +230,7 @@ class S4Model(nn.Module):
         return x
     
 # Definition of quantile regression (arXiv:2505.18311)
-class QuantileRegressionNN(nn.Module):
+class QRModel(nn.Module):
     """
     Neural Network for Quantile Regression as described in arXiv:2505.18311
     """
@@ -241,7 +241,7 @@ class QuantileRegressionNN(nn.Module):
             quantiles (tuple): Quantiles to estimate
             target (str): One of 'chirp_mass', 'mass_ratio', 'total_mass'
         """
-        super(QuantileRegressionNN, self).__init__()
+        super(QRModel, self).__init__()
         self.quantiles = quantiles
         self.target = target
         self.num_quantiles = len(quantiles)
@@ -252,7 +252,7 @@ class QuantileRegressionNN(nn.Module):
         # Hidden layers
         self.fc1 = nn.Linear(input_dim, 24)
         self.fc2 = nn.Linear(24, 12)
-        self.dropout = nn.Dropout(p=0.25)
+        self.dropout = nn.Dropout(p=0.20)
         self.leaky_relu = nn.LeakyReLU()
 
         # Output: raw quantile estimates

@@ -104,4 +104,10 @@ class QuantileLoss(nn.Module):
             return loss.sum()
         else:
             return loss
+        
+class MultiQuantileLoss(nn.Module):
+    """Multi-quantile loss function.
 
+    See (3) of arXiv:2505.18311.
+    """
+    pass
