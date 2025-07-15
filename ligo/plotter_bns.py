@@ -57,20 +57,20 @@ class Plotter:
         # self.param_latex = [r'$m_1$', r'$m_2$', r'$\mathcal{M}$', r'$q$',
         #     r'$M$', r'$\alpha$', r'$\delta$', r'$z$', r'$\theta_{\mathrm{JN}}$']
         self.param_list = ['chirp_mass']
-        self.param_latex = [r'$\mathcal{M}$']
+        self.param_latex = ['\mathcal{M}']
 
         # Placeholders
         self.ssm_model = nn.Module()
 
     def extract_timestamp(self, filepath, sep='_'):
-        """ Extracts the timestamp from the filename in the format '<directory>/YYYYMMDDHHMMSS.path'.
+        """ Extracts the timestamp from the filename in the format '<directory>/YYYYMMDDHHMMSS.path(.pt)'.
         Args:
             filepath (str): Path to the file from which to extract the timestamp.
             sep (str): Separator used in the filename. Default is '_'.
         Returns:
             str: The extracted timestamp in the format sep + 'YYYYMMDDHHMMSS', or '' if not found.
         Raises:
-            ValueError: If the file path does not exist, is not a string, or does not end with '.path'.
+            ValueError: If the file path does not exist, is not a string, or does not end with '.path'or '.pt'.
             ValueError: If the filename does not match the expected format.
             ValueError: If the timestamp is not found in the filename.
         """
@@ -79,12 +79,12 @@ class Plotter:
             raise ValueError(f"File path '{filepath}' does not exist.")
         if not isinstance(filepath, str):
             raise ValueError("File path must be a string.")
-        if not filepath.endswith('.path'):
-            raise ValueError("File path must end with '.path'.")
+        if not (filepath.endswith('.path') or filepath.endswith('.pt')):
+            raise ValueError("File path must end with '.path' or .'pt'.")
         if not isinstance(sep, str):
             raise ValueError("Separator must be a string.")
         filename = os.path.basename(filepath)
-        match = re.search(r'(\d{12})\.path$', filename)
+        match = re.search(r'(\d{12})\.(path|pt)$', filename)
         if match:
             return sep + match.group(1)
         else:
@@ -294,6 +294,41 @@ class Plotter:
         # Get loss per sample
         loss_per_sample = ssm_outputs['loss_per_sample'].numpy()
 
+        # Plot histograms
+        for i in range(len(self.param_list)):
+            param, platex = self.param_list[i], self.param_latex[i]
+            preds = ssm_outputs[f'pred_{param}'].numpy()
+            truths = ssm_outputs[f'truth_{param}'].numpy()
+            fig, ax = plt.subplots(figsize=(6, 4))
+
+            # Overlapping histograms with automatic range
+            counts_preds, bins_preds, patches_preds = plt.hist(
+                preds,
+                alpha=0.5,
+                label=f'$\\hat{{{platex}}}$',
+                color='blue'
+            )
+
+            counts_truths, bins_truths, patches_truths = plt.hist(
+                truths,
+                alpha=0.5,
+                label=fr'${platex}$',
+                color='red'
+            )
+
+            ax.set_xlabel(fr'${platex}$')
+            ax.set_ylabel('count / bin width')
+            ax.set_title(f'Predictions vs Truths for {param}')
+            ax.legend()
+            
+            if self.save_path is not None:
+                hist_name = os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_hist_{param}.png')
+                plt.savefig(hist_name, bbox_inches='tight')
+                print(f'Saved {hist_name}.')
+            else:
+                plt.tight_layout()
+                plt.close()
+
         # Plot uncertainties
         figure_uncertainties = corner.corner(
             ssm_uncertainties_stacked,
@@ -398,10 +433,10 @@ class Plotter:
             print(f'Loaded combined dataframe from {parquet_name} with shape {combined_df.shape}')
 
 if __name__ == "__main__":
-    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.d16.n10.250714214116.path'
+    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.d16.n10.o2.250715075028.pt'
     plotter = Plotter(datatype='BNS',
                       hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
                       split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')
-    plotter.plot_ssm_predictions(d_input=2, d_model=16, n_layers=10, d_output=2, batch_size=256,
-                                 downsample_factor=2, duration=4, scale_factor=1e22,
+    plotter.plot_ssm_predictions(d_input=2, d_model=16, n_layers=10, d_output=2, batch_size=128,
+                                 downsample_factor=2, duration=8, scale_factor=1e23,
                                  model_path=model_path, csv_output=True)
