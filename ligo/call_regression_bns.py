@@ -177,7 +177,7 @@ def main(timestamp=None):
         })
 
     wandb.finish()
-    save_model_name = os.path.join(task.modeldir, f'model.SSM.{task.datatype}.{task.loss}.d{task.d_model}.n{task.n_layers}.{timestamp}.path')
+    save_model_name = os.path.join(task.modeldir, f'model.SSM.{task.datatype}.{task.loss}.d{task.d_model}.n{task.n_layers}.o{task.d_output}.{timestamp}.pt')
     logger.info(f'Saving to {save_model_name}.')
     torch.save(task.model.state_dict(), save_model_name)
 
