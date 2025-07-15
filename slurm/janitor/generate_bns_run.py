@@ -24,7 +24,6 @@ def main():
     filename = bash_dir / f'bns_run_regression_d{args.d_model}_n{args.n_layers}_o{args.d_output}.sh'
 
     script_content = f'''#!/bin/bash
-sleep $(( RANDOM % 91 ))
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate ssm
 BASE_DIR="{ssm_dir}"
