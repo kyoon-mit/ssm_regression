@@ -52,10 +52,12 @@ class Plotter:
             os.makedirs(self.save_path, exist_ok=True)
             print(f'Created save path: {self.save_path}')
 
-        self.param_list = ['mass_1', 'mass_2', 'chirp_mass', 'mass_ratio',
-            'total_mass', 'right_ascension', 'declination', 'redshift', 'theta_jn']
-        self.param_latex = [r'$m_1$', r'$m_2$', r'$\mathcal{M}$', r'$q$',
-            r'$M$', r'$\alpha$', r'$\delta$', r'$z$', r'$\theta_{\mathrm{JN}}$']
+        # self.param_list = ['mass_1', 'mass_2', 'chirp_mass', 'mass_ratio',
+        #     'total_mass', 'right_ascension', 'declination', 'redshift', 'theta_jn']
+        # self.param_latex = [r'$m_1$', r'$m_2$', r'$\mathcal{M}$', r'$q$',
+        #     r'$M$', r'$\alpha$', r'$\delta$', r'$z$', r'$\theta_{\mathrm{JN}}$']
+        self.param_list = ['chirp_mass']
+        self.param_latex = [r'$\mathcal{M}$']
 
         # Placeholders
         self.ssm_model = nn.Module()
@@ -108,7 +110,7 @@ class Plotter:
         return df
 
     # Define loss function
-    def compute_loss(self, preds, targets, loss, reduction='none'):
+    def compute_loss(self, preds, n_output, targets, loss, reduction='none'):
         """
         Define the loss function based on the specified loss type.
         Supported losses are 'NLLGaussian' and 'Quantile'.
@@ -116,8 +118,8 @@ class Plotter:
         if loss == 'NLLGaussian':
             criterion = nn.GaussianNLLLoss(reduction=reduction, full=True, eps=1e-7)
             outputs = {
-                'mean': preds[:,:9],
-                'sigma': preds[:,9:18],
+                'mean': preds[:,:n_output],
+                'sigma': preds[:,n_output:n_output*2],
             }
             loss_fn = criterion(outputs['mean'], targets, outputs['sigma'])
         elif loss == 'Quantile':
@@ -126,9 +128,9 @@ class Plotter:
             q25_loss = QuantileLoss(quantile=0.25, reduction=reduction)
             q75_loss = QuantileLoss(quantile=0.75, reduction=reduction)
             outputs = {
-                'mean': outputs[:,:9],
-                'q25':  outputs[:,9:18],
-                'q75':  outputs[:,18:27],
+                'mean': preds[:,:n_output],
+                'q25':  preds[:,n_output:n_output*2],
+                'q75':  preds[:,n_output*2:n_output*3],
             }
             loss_fn = (
                 mean_loss(outputs['mean'], targets) +
@@ -152,11 +154,13 @@ class Plotter:
 
         inputs = torch.stack([h1.to(self.device), l1.to(self.device)], dim=2)
         truths = torch.stack([mass_1, mass_2,
-                               chirp_mass, mass_ratio, total_mass,
-                               right_ascension, declination, redshift, theta_jn], dim=1)
+                              chirp_mass, mass_ratio, total_mass,
+                              right_ascension, declination, redshift, theta_jn], dim=1)
         return inputs, truths
 
-    def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16, compute_on_cpu=False, csv_output=False, timestamp=''):
+    def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16,
+                         downsample_factor=1, duration=64, scale_factor=1.,
+                         compute_on_cpu=False, csv_output=False, timestamp=''):
         """
         Computes predictions and truths for the SSM model on the test data.
 
@@ -164,6 +168,9 @@ class Plotter:
             ssm_model (nn.Module): The SSM model to evaluate.
             loss (str): Loss function used in the model ('NLLGaussian' or 'Quantile').
             batch_size (int): Number of samples to process in each batch.
+            downsample_factor (int): Downsampling factor.
+            duration (int): Duration of signal in seconds.
+            scale_factor (float): Amplitude scale factor.
             compute_on_cpu (bool): If True, move computations to CPU.
             csv_output (bool): If True, save outputs to a CSV file.
             timestamp (str): Timestamp to append to the output filename.
@@ -195,6 +202,9 @@ class Plotter:
         _, _, test_data_loader = get_dataloaders(
             hdf5_path=self.hdf5_path,
             test_batch_size=batch_size,
+            downsample_factor=downsample_factor,
+            duration=duration,
+            scale_factor=scale_factor,
             train_split=0.8,
             test_split=0.1,
             split_indices_file='',  # No precomputed indices file
@@ -204,13 +214,10 @@ class Plotter:
         for _, vals in enumerate(test_data_loader):
             inputs, truths = self.stack_inputs_truths(vals)
             inputs = inputs.to(device) # (B, length of sequence, 2)
-            truths = truths.to(device) # (B, 9)
+            truths = truths.to(device) # (B, n_output)
 
             with torch.no_grad():
                 preds = ssm_model(inputs)
-
-            if preds.ndim == 3:
-                preds = preds.squeeze(2)  # e.g., (B, N, 2) → (B, N)
 
             # Move samples to CPU if required
             if compute_on_cpu:
@@ -226,7 +233,8 @@ class Plotter:
                 elif loss=='Quantile':
                     pred_q25_dict[f'q25_{p}'].extend(preds[:, i+len(self.param_list)].tolist())
                     pred_q75_dict[f'q75_{p}'].extend(preds[:, i+2*len(self.param_list)].tolist())
-            l = self.compute_loss(preds, truths, loss=loss, reduction='none')
+            l = self.compute_loss(preds=preds, n_output=len(self.param_list),
+                                  targets=truths, loss=loss, reduction='none')
             l = l.mean(dim=1, keepdim=False).tolist() # List of length B
             loss_per_sample.extend(l)
 
@@ -246,13 +254,11 @@ class Plotter:
 
         return return_dict
 
-    def plot_ssm_predictions(self, d_input, d_model, n_layers, model_path='', batch_size=16,
+    def plot_ssm_predictions(self, d_input, d_model, d_output, n_layers, model_path='', batch_size=16,
+                             downsample_factor=1, duration=64, scale_factor=1.,
                              save_prefix='ssm', loss='NLLGaussian', csv_output=False):
         timestamp = self.extract_timestamp(model_path, sep='_')
         from models import S4Model
-        if loss=='NLLGaussian': d_output = 18
-        elif loss=='Quantile': d_output = 27
-        else: raise ValueError(f'Unknown loss function: {loss}')
         if not model_path or not os.path.exists(model_path):
             raise ValueError(f"Model path '{model_path}' does not exist or was not provided.")
         self.ssm_model = S4Model(d_input=d_input, d_output=d_output, d_model=d_model, loss=loss, n_layers=n_layers, dropout=0.0, prenorm=False)
@@ -261,6 +267,7 @@ class Plotter:
         self.ssm_model.eval()
 
         ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=batch_size,
+                                            downsample_factor=downsample_factor, duration=duration, scale_factor=scale_factor,
                                             compute_on_cpu=False, csv_output=csv_output, timestamp=timestamp)
 
         # Get differences between predictions and truths
@@ -391,9 +398,10 @@ class Plotter:
             print(f'Loaded combined dataframe from {parquet_name} with shape {combined_df.shape}')
 
 if __name__ == "__main__":
-    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.250707141027.path'
+    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.d16.n10.250714214116.path'
     plotter = Plotter(datatype='BNS',
                       hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
                       split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')
-    plotter.plot_ssm_predictions(d_input=2, d_model=4, n_layers=4, batch_size=256,
+    plotter.plot_ssm_predictions(d_input=2, d_model=16, n_layers=10, d_output=2, batch_size=256,
+                                 downsample_factor=2, duration=4, scale_factor=1e22,
                                  model_path=model_path, csv_output=True)
