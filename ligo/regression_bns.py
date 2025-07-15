@@ -75,7 +75,7 @@ class SSMRegression():
         else:
             self.__raise__(f'Unknown loss type: {self.loss}. Supported losses are "NLLGaussian" and "Quantile".', ValueError)
 
-        self.datadir = os.path.join(Path(__file__).resolve().parent.parent.parent, self.datatype)
+        self.datadir = os.path.join(Path(__file__).resolve().parent.parent.parent, 'models', self.datatype)
         self.modeldir = os.path.join(self.datadir, 'output')
         if not os.path.exists(self.modeldir):
             os.makedirs(self.modeldir)
@@ -83,6 +83,8 @@ class SSMRegression():
 
         self.TRAIN_BATCH_SIZE = train_batch_size
         self.VAL_BATCH_SIZE = val_batch_size
+        train_split, test_split = 0.8, 0.1
+        random_seed = 42
 
         self.train_data_loader, self.val_data_loader, _ = get_dataloaders(
             hdf5_path=hdf5_path,
@@ -91,10 +93,10 @@ class SSMRegression():
             scale_factor=scale_factor,
             train_batch_size=self.TRAIN_BATCH_SIZE,
             val_batch_size=self.VAL_BATCH_SIZE,
-            train_split=0.8,
-            test_split=0.1,
+            train_split=train_split,
+            test_split=test_split,
             split_indices_file=split_indices_file,
-            random_seed=42
+            random_seed=random_seed
         )
 
         self.model = None
@@ -104,6 +106,28 @@ class SSMRegression():
         if self.device.type == 'cuda':
             torch.tensor([0.0], device=self.device)
             torch.cuda.empty_cache()
+
+        logger.info(f'''
+        d_input={self.d_input},
+        d_output={self.d_output},
+        d_model={self.d_model},
+        n_layers={self.n_layers},
+        downsample_factor={downsample_factor},
+        duration={duration},
+        scale_factor={scale_factor},
+        dropout={self.dropout},
+        train_batch_size={self.TRAIN_BATCH_SIZE},
+        val_batch_size={self.VAL_BATCH_SIZE},
+        prenorm={self.prenorm},
+        device={self.device},
+        datatype={self.datatype},
+        hdf5_path={hdf5_path},
+        split_indices_file={split_indices_file},
+        loss='{self.loss},
+        train_split={train_split},
+        test_split={test_split},
+        random_seed={random_seed}
+        ''')
 
     def build_model(self):
         """
@@ -167,13 +191,13 @@ class SSMRegression():
         if self.loss == 'NLLGaussian':
             return {
                 'mean': outputs[:,:n_output],
-                'sigma': outputs[:,n_output:self.d_output],
+                'sigma': outputs[:,n_output:2*n_output],
             }
         elif self.loss=='Quantile':
             return {
                 'mean': outputs[:,:n_output],
                 'q25':  outputs[:,n_output:n_output*2],
-                'q75':  outputs[:,n_output*2:self.d_output],
+                'q75':  outputs[:,n_output*2:3*n_output],
             }
         else:
             self.__raise__(f'Unknown loss type: {self.loss}. Supported losses are "NLLGaussian" and "Quantile".', ValueError)
@@ -285,10 +309,9 @@ if __name__=='__main__':
     task.setup_optimizer(lr=0.001, weight_decay=0.01)
 
     timestamp = datetime.now().strftime('%y%m%d%H%M%S')
-
-    wandb.init(project=f'ssm_{task.datatype}_regression', name=f'ssm_{task.datatype}_{timestamp}')
-
-    EPOCHS = 100
+    logger.info(f'{timestamp=}')
+    wandb.init(project=f'ssm_{datatag}_regression', name=f'ssm_{datatag}_{timestamp}')
+    EPOCHS = args.epochs
 
     pbar = tqdm(range(task.start_epoch, EPOCHS))
     for epoch_number in pbar:
@@ -298,7 +321,6 @@ if __name__=='__main__':
             pbar.set_description('Epoch: %d' % (epoch_number))
         else:
             pbar.set_description('Epoch: %d | Val loss: %1.3f' % (epoch_number, avg_val_loss))
-        #eval(epoch, test_loader)
         task.scheduler.step()
 
         wandb.log({
@@ -314,6 +336,7 @@ if __name__=='__main__':
             'datatype': task.datatype,
             'loss': task.loss,
             'd_input': task.d_input,
+            'd_output': task.d_output,
             'd_model': task.d_model,
             'n_layers': task.n_layers,
             'dropout': task.dropout,
@@ -327,11 +350,10 @@ if __name__=='__main__':
             'num_epochs': EPOCHS,
             'optimizer': str(task.optimizer),
             'scheduler': str(task.scheduler),
-            'wandb_run_id': wandb.run.id,
+            'comment': args.comment,
         })
 
     wandb.finish()
-
-    save_path = os.path.join(task.modeldir, f'ssm_{task.datatype}_{timestamp}.pt')
-    torch.save(task.model.state_dict(), save_path)
-    logger.info(f'Model saved to {save_path}')
+    save_model_name = os.path.join(task.modeldir, f'model.SSM.{task.datatype}.{task.loss}.d{task.d_model}.n{task.n_layers}.{timestamp}.path')
+    logger.info(f'Saving to {save_model_name}.')
+    torch.save(task.model.state_dict(), save_model_name)
