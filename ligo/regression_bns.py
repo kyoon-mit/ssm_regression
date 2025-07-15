@@ -6,7 +6,6 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
-torch.cuda.empty_cache()
 
 import sys
 from pathlib import Path
@@ -14,6 +13,8 @@ sys.path.append(os.path.join(Path(__file__).resolve().parent.parent, 'modules'))
 
 from models import S4Model
 from losses import QuantileLoss
+
+import psutil, os
 
 logger = logging.getLogger('ssm_regression')
 
@@ -28,6 +29,9 @@ class SSMRegression():
         d_output=18,
         d_model=6,
         n_layers=4,
+        downsample_factor=1,
+        duration=64,
+        scale_factor=1.,
         dropout=0.0,
         train_batch_size=100,
         val_batch_size=100,
@@ -64,6 +68,13 @@ class SSMRegression():
         self.datatype = datatype
         self.loss = loss
 
+        if loss=='NLLGaussian':
+            self.n_output = int(d_output // 2)
+        elif loss=='Quantile':
+            self.n_output = int(d_output // 3)
+        else:
+            self.__raise__(f'Unknown loss type: {self.loss}. Supported losses are "NLLGaussian" and "Quantile".', ValueError)
+
         self.datadir = os.path.join(Path(__file__).resolve().parent.parent.parent, self.datatype)
         self.modeldir = os.path.join(self.datadir, 'output')
         if not os.path.exists(self.modeldir):
@@ -75,6 +86,9 @@ class SSMRegression():
 
         self.train_data_loader, self.val_data_loader, _ = get_dataloaders(
             hdf5_path=hdf5_path,
+            downsample_factor=downsample_factor,
+            duration=duration,
+            scale_factor=scale_factor,
             train_batch_size=self.TRAIN_BATCH_SIZE,
             val_batch_size=self.VAL_BATCH_SIZE,
             train_split=0.8,
@@ -86,6 +100,11 @@ class SSMRegression():
         self.model = None
         self.optimizer, self.scheduler = None, None
 
+        # Create a dummy tensor to ensure CUDA is initialized if using GPU
+        if self.device.type == 'cuda':
+            torch.tensor([0.0], device=self.device)
+            torch.cuda.empty_cache()
+
     def build_model(self):
         """
         Build the S4 model for regression.
@@ -96,6 +115,9 @@ class SSMRegression():
                              d_model=self.d_model, n_layers=self.n_layers, dropout=self.dropout,
                              prenorm=self.prenorm)
         self.model = self.model.to(self.device)
+        if torch.cuda.device_count() > 1:
+            logger.info(f'Using {torch.cuda.device_count()} GPUs')
+            self.model = nn.DataParallel(self.model)
         # Requires setup with torch.distributed.launch or torchrun
         # self.model = torch.nn.parallel.DistributedDataParallel(self.model)
         logger.info('...done!')
@@ -137,28 +159,24 @@ class SSMRegression():
         self.doc_loss = []
         self.doc_val = []
 
-    def split_outputs(self, outputs):
+    def split_outputs(self, n_output, outputs):
         """
-        Outputs are of shape (B, 18) with mean and uncertainties.
-        If loss is 'Quantile', outputs are of shape (B, 27) with mean, q25, and q75.
-        Split model output of shape (B, 27) into mean, 25% quantile, and 75% quantile predictions.
-        Returns a dict with 'mean', 'q25', and 'q75' tensors each of shape (B, 27).
+        If loss is 'NLLGaussian', outputs are of shape (B, 2*n_output) with mean and uncertainties.
+        If loss is 'Quantile', outputs are of shape (B, 3*n_output) with mean, q25, and q75.
         """
         if self.loss == 'NLLGaussian':
             return {
-                'mean': outputs[:,:9],
-                'sigma': outputs[:,9:18],
+                'mean': outputs[:,:n_output],
+                'sigma': outputs[:,n_output:self.d_output],
             }
         elif self.loss=='Quantile':
             return {
-                'mean': outputs[:,:9],
-                'q25':  outputs[:,9:18],
-                'q75':  outputs[:,18:27],
+                'mean': outputs[:,:n_output],
+                'q25':  outputs[:,n_output:n_output*2],
+                'q75':  outputs[:,n_output*2:self.d_output],
             }
         else:
-            msg = f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'."
-            logger.error(msg)
-            raise ValueError(msg)
+            self.__raise__(f'Unknown loss type: {self.loss}. Supported losses are "NLLGaussian" and "Quantile".', ValueError)
 
     # Define loss function
     def compute_loss(self, outputs, targets):
@@ -179,9 +197,7 @@ class SSMRegression():
                 q75_loss(outputs['q75'], targets)
             )
         else:
-            msg = f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'."
-            logger.error(msg)
-            raise ValueError(msg)
+           self.__raise__(f'Unknown loss type: {self.loss}. Supported losses are "NLLGaussian" and "Quantile".', ValueError)
         return loss_fn
 
     def stack_inputs_targets(self, vals):
@@ -189,17 +205,19 @@ class SSMRegression():
         mass_1 = params['mass_1'].to(self.device)
         mass_2 = params['mass_2'].to(self.device)
         chirp_mass = (mass_1 * mass_2)**(3/5) / (mass_1 + mass_2)**(1/5)
-        mass_ratio = mass_2 / mass_1
-        total_mass = mass_1 + mass_2
-        right_ascension = params['ra'].to(self.device)
-        declination = params['dec'].to(self.device)
-        redshift = params['redshift'].to(self.device)
-        theta_jn = params['theta_jn'].to(self.device)
+        # mass_ratio = mass_2 / mass_1
+        # total_mass = mass_1 + mass_2
+        # right_ascension = params['ra'].to(self.device)
+        # declination = params['dec'].to(self.device)
+        # redshift = params['redshift'].to(self.device)
+        # theta_jn = params['theta_jn'].to(self.device)
 
         inputs = torch.stack([h1.to(self.device), l1.to(self.device)], dim=2)
-        targets = torch.stack([mass_1, mass_2,
-                               chirp_mass, mass_ratio, total_mass,
-                               right_ascension, declination, redshift, theta_jn], dim=1)
+        targets = torch.stack([chirp_mass], dim=1)
+        # targets = torch.stack([mass_1, mass_2], dim=1)
+        # targets = torch.stack([mass_1, mass_2,
+        #                        chirp_mass, mass_ratio, total_mass,
+        #                        right_ascension, declination, redshift, theta_jn], dim=1)
         return inputs, targets
 
     # Training
@@ -208,11 +226,13 @@ class SSMRegression():
         train_loss = 0
         pbar = tqdm(enumerate(self.train_data_loader))
         for batch_idx, vals in pbar:
+            process = psutil.Process(os.getpid())
+            logger.info(f'Memory usage in training (MB): {process.memory_info().rss / 1024 / 1024:.2f}')
             inputs, targets = self.stack_inputs_targets(vals)
             self.optimizer.zero_grad()
 
             preds = self.model(inputs)
-            outputs = self.split_outputs(preds)
+            outputs = self.split_outputs(n_output=self.n_output, outputs=preds)
             loss = self.compute_loss(outputs, targets)
             loss.backward()
             self.optimizer.step()
@@ -224,6 +244,7 @@ class SSMRegression():
                 (batch_idx, len(self.train_data_loader), train_loss/(batch_idx+1))
             )
             self.doc_loss.append(train_loss/(batch_idx+1))
+            torch.cuda.empty_cache()
         return train_loss / len(self.train_data_loader)
 
     def eval(self, epoch, checkpoint=False):
@@ -232,9 +253,11 @@ class SSMRegression():
         with torch.no_grad():
             pbar = tqdm(enumerate(self.val_data_loader))
             for batch_idx, vals in pbar:
+                process = psutil.Process(os.getpid())
+                logger.info(f'Memory usage in training (MB): {process.memory_info().rss / 1024 / 1024:.2f}')
                 inputs, targets = self.stack_inputs_targets(vals)
                 preds = self.model(inputs)
-                outputs = self.split_outputs(preds)
+                outputs = self.split_outputs(n_output=self.n_output, outputs=preds)
 
                 # Compute loss
                 loss = self.compute_loss(outputs, targets)
@@ -245,6 +268,7 @@ class SSMRegression():
                     (batch_idx, len(self.val_data_loader), eval_loss/(batch_idx+1))
                 )
                 self.doc_val.append(eval_loss/(batch_idx+1))
+                torch.cuda.empty_cache()
         return eval_loss / len(self.val_data_loader)
 
 

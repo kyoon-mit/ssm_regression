@@ -10,6 +10,9 @@ def main():
     parser.add_argument('-e', '--epochs', type=int, required=True, help='Number of epochs')
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate')
     parser.add_argument('--d_output', type=int, default=18, help='Number of output nodes')
+    parser.add_argument('--downsample_factor', type=int, default=2, help='Downsampling factor')
+    parser.add_argument('--duration', type=int, default=4, help='Duration of the coalescence')
+    parser.add_argument('--scale_factor', type=float, default=1., help='Scale factor')
     parser.add_argument('--comment', type=str, default='', help='Additional comment for the run')
     args = parser.parse_args()
     print(args)
@@ -35,11 +38,16 @@ python ${{BASE_DIR}}/ligo/call_regression_bns.py -t BNS \\
 --epochs {args.epochs} \\
 --d_output {args.d_output} \\
 --d_model {args.d_model} \\
---dropout {args.dropout} \\
 --n_layers {args.n_layers} \\
+--dropout {args.dropout} \\
 --loss NLLGaussian \\
+--downsample_factor {args.downsample_factor} \\
+--duration {args.duration} \\
+--scale_factor {args.scale_factor} \\
 --logfile="${{BASE_DIR}}/slurm/logs/bns_regression.log" \\
---comment="BNS injection (20000 samples); loss=NLLGaussian; d_model={args.d_model}, n_layers={args.n_layers}; d_output={args.d_output};
+--comment="BNS injection (20000 samples); loss=NLLGaussian;
+d_model={args.d_model}, n_layers={args.n_layers}; d_output={args.d_output};
+downsample_factor={args.downsample_factor}, duration={args.duration}, scale_factor={args.scale_factor};
 {args.comment}"
 '''
 

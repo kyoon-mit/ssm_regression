@@ -34,6 +34,9 @@ def parse_args():
     parser.add_argument('--d_model', type=int,
                         default=6,
                         help='Dimension of the model.')
+    parser.add_argument('--d_output', type=int,
+                        default=18,
+                        help='Number of output nodes.')
     parser.add_argument('--n_layers', type=int,
                         default=4,
                         help='Number of layers in the model.')
@@ -46,6 +49,14 @@ def parse_args():
     parser.add_argument('--weight_decay', type=float,
                         default=0.01,
                         help='Weight decay for the optimizer.')
+    parser.add_argument('--downsample_factor', type=int,
+                        default=2,
+                        help='Downsampling factor')
+    parser.add_argument('--duration', type=int,
+                        default=4, help='Duration of the coalescence')
+    parser.add_argument('--scale_factor', type=float,
+                        default=1.,
+                        help='Scale factor')
     parser.add_argument('--logfile', type=str, default=None, help='Name of the log file.')
     parser.add_argument('--loglevel', type=str, default='info',
                         choices=['notset', 'debug', 'info', 'warning', 'error', 'critical'],
@@ -56,7 +67,7 @@ def parse_args():
     print(args)
     return args
 
-def configure_logging(logfile, loglevel):
+def configure_logging(logfile, loglevel, timestamp=None):
     logger = logging.getLogger('ssm_regression')
     # Remove all existing handlers
     logger.handlers.clear()
@@ -74,6 +85,9 @@ def configure_logging(logfile, loglevel):
         case 'critical':
             logger.setLevel(logging.CRITICAL)
     if logfile:
+        if timestamp:
+            logger.info(f'{timestamp=}')
+            logfile = logfile.replace('.log', f'_{timestamp}.log')
         os.makedirs(os.path.dirname(logfile), exist_ok=True)  # Ensure directory exists
         file_handler = logging.FileHandler(logfile, 'w+')
         file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
@@ -81,14 +95,14 @@ def configure_logging(logfile, loglevel):
     stream_handler = logging.StreamHandler()
     stream_handler.setLevel(logging.INFO)
     logger.addHandler(stream_handler)
-    return
+    return logger
 
-def main():
+def main(timestamp=None):
     args = parse_args()
-    configure_logging(logfile=args.logfile, loglevel=args.loglevel)
-    
+    logger = configure_logging(logfile=args.logfile, loglevel=args.loglevel, timestamp=timestamp)
+
     datatype = args.datatype
-    datatag = 'bns'  # default tag for toy datasets
+    datatag = 'bns'
     loss = args.loss
     
     if datatype not in ['BNS']:
@@ -98,8 +112,13 @@ def main():
     
     # Initialize the regression model
     task = SSMRegression(
+        d_output=args.d_output,
         d_model=args.d_model,
         n_layers=args.n_layers,
+        downsample_factor=args.downsample_factor,
+        duration=args.duration,
+        scale_factor=args.scale_factor,
+        dropout=args.dropout,
         datatype=args.datatype,
         loss=args.loss,
         train_batch_size=args.batch_size,
@@ -111,7 +130,9 @@ def main():
     task.build_model()
     task.setup_optimizer(lr=args.lr, weight_decay=args.weight_decay)
 
-    timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+    if timestamp is None:
+        timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+    logger.info(f'{timestamp=}')
     wandb.init(project=f'ssm_{datatag}_regression', name=f'ssm_{datatag}_{timestamp}')
     EPOCHS = args.epochs
 
@@ -134,17 +155,16 @@ def main():
             'doc_val': task.doc_val,
             'model': task.model.state_dict(),
             'best_loss': task.best_loss,
-            'timestamp': timestamp,
+            'str_timestamp': timestamp, # timestamp in str format
             'datatype': task.datatype,
             'loss': task.loss,
             'd_input': task.d_input,
+            'd_output': task.d_output,
             'd_model': task.d_model,
             'n_layers': task.n_layers,
             'dropout': task.dropout,
             'prenorm': task.prenorm,
             'device': str(task.device),
-            'train_data_size': len(task.train_data),
-            'val_data_size': len(task.val_data),
             'train_batch_size': task.TRAIN_BATCH_SIZE,
             'val_batch_size': task.VAL_BATCH_SIZE,
             'modeldir': task.modeldir,
@@ -157,7 +177,10 @@ def main():
         })
 
     wandb.finish()
-    torch.save(task.model.state_dict(), os.path.join(task.modeldir, f'model.SSM.{task.datatype}.{task.loss}.{timestamp}.path'))
+    save_model_name = os.path.join(task.modeldir, f'model.SSM.{task.datatype}.{task.loss}.d{task.d_model}.n{task.n_layers}.{timestamp}.path')
+    logger.info(f'Saving to {save_model_name}.')
+    torch.save(task.model.state_dict(), save_model_name)
 
 if __name__ == '__main__':
-    main()
+    timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+    main(timestamp=timestamp)
