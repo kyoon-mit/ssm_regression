@@ -8,6 +8,9 @@ def main():
     parser.add_argument('-n', '--n_layers', type=int, required=True, help='Number of layers')
     parser.add_argument('-b', '--batch_size', type=int, required=True, help='Batch size')
     parser.add_argument('-e', '--epochs', type=int, required=True, help='Number of epochs')
+    parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate')
+    parser.add_argument('--d_output', type=int, default=18, help='Number of output nodes')
+    parser.add_argument('--comment', type=str, default='', help='Additional comment for the run')
     args = parser.parse_args()
     print(args)
 
@@ -15,7 +18,7 @@ def main():
     ssm_dir = script_dir.parent
     model_dir = os.path.join(ssm_dir.parent, 'models')
     bash_dir = script_dir / 'bash_scripts'
-    filename = bash_dir / f'bns_run_regression_d{args.d_model}_n{args.n_layers}.sh'
+    filename = bash_dir / f'bns_run_regression_d{args.d_model}_n{args.n_layers}_o{args.d_output}.sh'
 
     script_content = f'''#!/bin/bash
 sleep $(( RANDOM % 91 ))
@@ -30,11 +33,14 @@ python ${{BASE_DIR}}/ligo/call_regression_bns.py -t BNS \\
 --batch_size {args.batch_size} \\
 --device cuda \\
 --epochs {args.epochs} \\
+--d_output {args.d_output} \\
 --d_model {args.d_model} \\
+--dropout {args.dropout} \\
 --n_layers {args.n_layers} \\
 --loss NLLGaussian \\
 --logfile="${{BASE_DIR}}/slurm/logs/bns_regression.log" \\
---comment="BNS injection (20000 samples); loss=NLLGaussian; d_model={args.d_model}, n_layers={args.n_layers}"
+--comment="BNS injection (20000 samples); loss=NLLGaussian; d_model={args.d_model}, n_layers={args.n_layers}; d_output={args.d_output};
+{args.comment}"
 '''
 
     with open(filename, 'w') as f:
