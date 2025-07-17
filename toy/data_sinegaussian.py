@@ -13,7 +13,7 @@ random.seed(SEED)
 # path = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
 savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian'
 global sfx
-sfx = '_sigma0.4_poisson'
+sfx = '_sigma0.4_gaussian'
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")

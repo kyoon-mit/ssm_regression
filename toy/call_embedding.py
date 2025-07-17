@@ -3,9 +3,13 @@ import logging
 import argparse
 from embedding import Embedding
 
-import os
+import os, sys
 import torch
 from datetime import datetime
+
+from pathlib import Path
+sys.path.append(os.path.join(Path(__file__).resolve().parent.parent, 'modules'))
+from utils import configure_logging
 
 def parse_args():
     parser = argparse.ArgumentParser(prog='embedding.py')
@@ -37,36 +41,10 @@ def parse_args():
     print(args)
     return args
 
-def configure_logging(logfile, loglevel):
-    logger = logging.getLogger('embedding')
-    # Remove all existing handlers
-    logger.handlers.clear()
-    match loglevel:
-        case 'notset':
-            logger.setLevel(logging.NOTSET)
-        case 'debug':
-            logger.setLevel(logging.DEBUG)
-        case 'info':
-            logger.setLevel(logging.INFO)
-        case 'warning':
-            logger.setLevel(logging.WARNING)
-        case 'error':
-            logger.setLevel(logging.ERROR)
-        case 'critical':
-            logger.setLevel(logging.CRITICAL)
-    if logfile:
-        os.makedirs(os.path.dirname(logfile), exist_ok=True)  # Ensure directory exists
-        file_handler = logging.FileHandler(logfile, 'w+')
-        file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
-        logger.addHandler(file_handler)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.INFO)
-    logger.addHandler(stream_handler)
-    return
-
 def main():
     args = parse_args()
-    configure_logging(logfile=args.logfile, loglevel=args.loglevel)
+    timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+    configure_logging(logname='embedding', logfile=args.logfile, loglevel=args.loglevel, timestamp=timestamp)
     
     datatype = args.datatype
     datatag = 'toy'  # default tag for toy datasets
@@ -75,8 +53,6 @@ def main():
     if datatype=='SHO': datatag = 'sho'
     elif datatype=='SineGaussian': datatag = 'sg'
     elif datatype=='LIGO': datatag = 'ligo'
-
-    timestamp = datetime.now().strftime('%y%m%d%H%M%S')
 
     # os.environ['WANDB_MODE'] = 'offline'
     wandb.init(project=f'embedding_{datatag}', name=f'embedding_{datatag}_{timestamp}')
@@ -110,6 +86,7 @@ def main():
 
         print(f"Train/Val Sim Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
 
+        modelname = os.path.join(task.modeldir, f'embedding.CNN.{datatype}.{timestamp}.pt')
         wandb.log({
             'epoch': epoch_number,
             'train_loss': avg_train_loss,
@@ -125,7 +102,7 @@ def main():
             'batch_size': args.batch_size,
             'timestamp': timestamp,
             'modeldir': task.modeldir,
-            'modelname': f'model.CNN.{datatype}.{timestamp}.path',
+            'modelname': modelname,
             'comment': args.comment
         })
 
@@ -137,7 +114,7 @@ def main():
 
     wandb.finish()
 
-    torch.save(task.model.state_dict(), os.path.join(task.modeldir, f'model.CNN.{datatype}.{timestamp}.path'))
+    torch.save(task.model.state_dict(), modelname)
 
 if __name__=='__main__':
     main()

@@ -4,9 +4,13 @@ import argparse
 from regression import SSMRegression
 from tqdm.auto import tqdm
 
-import os
+import os, sys
 import torch
 from datetime import datetime
+
+from pathlib import Path
+sys.path.append(os.path.join(Path(__file__).resolve().parent.parent, 'modules'))
+from utils import configure_logging
 
 def parse_args():
     parser = argparse.ArgumentParser(prog='regression.py')
@@ -53,36 +57,9 @@ def parse_args():
     print(args)
     return args
 
-def configure_logging(logfile, loglevel):
-    logger = logging.getLogger('ssm_regression')
-    # Remove all existing handlers
-    logger.handlers.clear()
-    match loglevel:
-        case 'notset':
-            logger.setLevel(logging.NOTSET)
-        case 'debug':
-            logger.setLevel(logging.DEBUG)
-        case 'info':
-            logger.setLevel(logging.INFO)
-        case 'warning':
-            logger.setLevel(logging.WARNING)
-        case 'error':
-            logger.setLevel(logging.ERROR)
-        case 'critical':
-            logger.setLevel(logging.CRITICAL)
-    if logfile:
-        os.makedirs(os.path.dirname(logfile), exist_ok=True)  # Ensure directory exists
-        file_handler = logging.FileHandler(logfile, 'w+')
-        file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
-        logger.addHandler(file_handler)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.INFO)
-    logger.addHandler(stream_handler)
-    return
-
 def main():
     args = parse_args()
-    configure_logging(logfile=args.logfile, loglevel=args.loglevel)
+    configure_logging(logname='ssm_regression', logfile=args.logfile, loglevel=args.loglevel)
     
     datatype = args.datatype
     datatag = 'toy'  # default tag for toy datasets
@@ -133,7 +110,7 @@ def main():
             'doc_val': task.doc_val,
             'model': task.model.state_dict(),
             'best_loss': task.best_loss,
-            'timestamp': timestamp,
+            'str_timestamp': timestamp, # timestamp in str format
             'datatype': task.datatype,
             'loss': task.loss,
             'd_input': task.d_input,

@@ -1,11 +1,9 @@
 import logging
-import os
+import os, sys
 
 import torch
 from torch.utils.data import DataLoader
 from torch import optim
-import wandb
-from datetime import datetime
 
 logger = logging.getLogger('embedding')
 
@@ -64,6 +62,7 @@ class Embedding():
     def build_model(self):
         logger.info('==> Building embedding model...')
         # Load loss and model
+        sys.path.append('/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/modules')
         from losses import VICRegLoss
         from models import SimilarityEmbedding
         self.vicreg_loss = VICRegLoss()
@@ -146,6 +145,9 @@ class Embedding():
         return last_sim_loss
 
 if __name__=='__main__':
+
+    import wandb
+    from datetime import datetime
 
     datatype = 'SHO'
     timestamp = datetime.now().strftime('%y%m%d%H%M%S')

@@ -6,7 +6,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 class DataGenerator(Dataset):
-    def __init__(self, hdf5_path, downsample_factor=1, duration=4, scale_factor=1.):
+    def __init__(self, hdf5_path, downsample_factor=1, duration=4, scale_factor=1.,
+                 normalize=False):
         self.h5file = h5py.File(hdf5_path, 'r')
         self.coalescence_time = self.h5file.attrs['coalescence_time'] # Time of coalescence
         # self.duration = self.h5file.attrs['duration'] # Duration of the waveform in seconds
@@ -21,6 +22,7 @@ class DataGenerator(Dataset):
         self.length = self.waveforms_h1.shape[0]
         self.downsample_factor, self.duration = int(downsample_factor), duration
         self.scale_factor = scale_factor
+        self.normalize = normalize
 
     def __len__(self):
         return self.length
@@ -92,7 +94,7 @@ def get_dataloaders(hdf5_path, downsample_factor=1, duration=64, scale_factor=1.
         raise ValueError("The total number of indices does not match the dataset size. Check your split ratios and dataset size.")
     # Check that the indices don't overlap
     if (set(train_indices) & set(val_indices)) or (set(train_indices) & set(test_indices)) or (set(val_indices) & set(test_indices)):
-        raise Va;lueError("Indices overlap between train, validation, and test sets. Ensure that the splits are disjoint.")
+        raise ValueError("Indices overlap between train, validation, and test sets. Ensure that the splits are disjoint.")
 
     # Create Subsets
     train_dataset = Subset(dataset, train_indices)

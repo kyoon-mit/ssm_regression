@@ -5,7 +5,7 @@ python ${BASE_DIR}/call_regression.py -t SHO -s _sigma0.4_gaussian \
 --device cuda \
 --epochs 100 \
 --d_model 2 \
---n_layer 1 \
+--n_layers 1 \
 --loss NLLGaussian \
 --logfile="${BASE_DIR}/slurm/logs/sho_regression.log" \
---comment="Gaussian noise with sigma 0.4; loss=NLLGaussian; minimalistic model w/ d_model=2, n_layer=1"
+--comment="Gaussian noise with sigma 0.4; loss=NLLGaussian; minimalistic model w/ d_model=2, n_layers=1"

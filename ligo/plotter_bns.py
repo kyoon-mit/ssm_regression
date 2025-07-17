@@ -12,6 +12,7 @@ from matplotlib.patches import Patch
 import sys
 from pathlib import Path
 sys.path.append(os.path.join(Path(__file__).resolve().parent.parent, 'modules'))
+from utils import extract_timestamp
 
 print(sys.executable)
 print(torch.__version__)
@@ -62,33 +63,11 @@ class Plotter:
         # Placeholders
         self.ssm_model = nn.Module()
 
-    def extract_timestamp(self, filepath, sep='_'):
-        """ Extracts the timestamp from the filename in the format '<directory>/YYYYMMDDHHMMSS.path(.pt)'.
-        Args:
-            filepath (str): Path to the file from which to extract the timestamp.
-            sep (str): Separator used in the filename. Default is '_'.
-        Returns:
-            str: The extracted timestamp in the format sep + 'YYYYMMDDHHMMSS', or '' if not found.
-        Raises:
-            ValueError: If the file path does not exist, is not a string, or does not end with '.path'or '.pt'.
-            ValueError: If the filename does not match the expected format.
-            ValueError: If the timestamp is not found in the filename.
-        """
-        import re
-        if not os.path.exists(filepath):
-            raise ValueError(f"File path '{filepath}' does not exist.")
-        if not isinstance(filepath, str):
-            raise ValueError("File path must be a string.")
-        if not (filepath.endswith('.path') or filepath.endswith('.pt')):
-            raise ValueError("File path must end with '.path' or .'pt'.")
-        if not isinstance(sep, str):
-            raise ValueError("Separator must be a string.")
-        filename = os.path.basename(filepath)
-        match = re.search(r'(\d{12})\.(path|pt)$', filename)
-        if match:
-            return sep + match.group(1)
-        else:
-            return ''
+    def __savefig___(self, plot, save_name):
+        save_name = os.path.join(self.save_path, save_name)
+        plot.savefig(save_name, bbox_inches='tight')
+        print(f'Saved {save_name}.')
+        return
 
     def compute_z_scores(self, pred_means, pred_stds, truth_means):
         diffs = pred_means - truth_means
@@ -153,9 +132,10 @@ class Plotter:
         theta_jn = params['theta_jn'].to(self.device)
 
         inputs = torch.stack([h1.to(self.device), l1.to(self.device)], dim=2)
-        truths = torch.stack([mass_1, mass_2,
-                              chirp_mass, mass_ratio, total_mass,
-                              right_ascension, declination, redshift, theta_jn], dim=1)
+        # truths = torch.stack([mass_1, mass_2,
+        #                       chirp_mass, mass_ratio, total_mass,
+        #                       right_ascension, declination, redshift, theta_jn], dim=1)
+        truths = torch.stack([chirp_mass], dim=1)
         return inputs, truths
 
     def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16,
@@ -257,7 +237,7 @@ class Plotter:
     def plot_ssm_predictions(self, d_input, d_model, d_output, n_layers, model_path='', batch_size=16,
                              downsample_factor=1, duration=64, scale_factor=1.,
                              save_prefix='ssm', loss='NLLGaussian', csv_output=False):
-        timestamp = self.extract_timestamp(model_path, sep='_')
+        timestamp = extract_timestamp(model_path, sep='_')
         from models import S4Model
         if not model_path or not os.path.exists(model_path):
             raise ValueError(f"Model path '{model_path}' does not exist or was not provided.")
@@ -299,35 +279,58 @@ class Plotter:
             param, platex = self.param_list[i], self.param_latex[i]
             preds = ssm_outputs[f'pred_{param}'].numpy()
             truths = ssm_outputs[f'truth_{param}'].numpy()
-            fig, ax = plt.subplots(figsize=(6, 4))
+            if loss=='NLLGaussian':
+                sigma = ssm_outputs[f'sigma_{param}'].numpy()
+            elif loss=='Quantile':
+                sigma = (ssm_outputs[f'q75_{param}'] - ssm_outputs[f'q25_{param}']).numpy()
+            else:
+                raise ValueError(f'Invalid {loss=}.')
+            
+            fig1, ax1 = plt.subplots(figsize=(6, 4))
+            fig2, ax2 = plt.subplots(figsize=(6, 4))
 
             # Overlapping histograms with automatic range
-            counts_preds, bins_preds, patches_preds = plt.hist(
+            counts_preds, bins_preds, patches_preds = ax1.hist(
                 preds,
                 alpha=0.5,
                 label=f'$\\hat{{{platex}}}$',
                 color='blue'
             )
 
-            counts_truths, bins_truths, patches_truths = plt.hist(
+            counts_truths, bins_truths, patches_truths = ax1.hist(
                 truths,
                 alpha=0.5,
                 label=fr'${platex}$',
                 color='red'
             )
 
-            ax.set_xlabel(fr'${platex}$')
-            ax.set_ylabel('count / bin width')
-            ax.set_title(f'Predictions vs Truths for {param}')
-            ax.legend()
-            
+            counts_diff, bins_diff, patches_diff = ax2.hist(
+                (preds - truths)/sigma,
+                alpha=0.5,
+                label=f'$(\\hat{{{platex}}}/{platex})/\\sigma_{{{platex}}}$',
+                color='purple'
+            )
+
+            ax1.set_xlabel(param)
+            ax1.set_ylabel('count / bin width')
+            ax1.set_title(f'Predictions vs Truths for {param}')
+            ax1.legend()
+
+            ax2.set_xlabel('value')
+            ax2.set_ylabel('count / bin width')
+            ax2.set_title(f'{param}: [(pred) - (truth)]/(sigma)')
+            ax2.legend()
+
             if self.save_path is not None:
-                hist_name = os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_hist_{param}.png')
-                plt.savefig(hist_name, bbox_inches='tight')
-                print(f'Saved {hist_name}.')
+                self.__savefig___(fig1, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_hist_{param}.png')
+                self.__savefig___(fig2, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_diff_{param}.png')
             else:
-                plt.tight_layout()
-                plt.close()
+                fig1.tight_layout()
+                fig1.show()
+                fig2.tight_layout()
+                fig2.show()
+                fig1.close()
+                fig2.close()
 
         # Plot uncertainties
         figure_uncertainties = corner.corner(
@@ -423,7 +426,7 @@ class Plotter:
                 _df = _df.reset_index()
                 _df['event_id'] = _df['event_id'].ffill()
                 _df = _df.set_index('event_id')
-                dfs.append(_df)           
+                dfs.append(_df)
             combined_df = pd.concat(dfs, axis=0, ignore_index=False)
             print(f'Combined {len(bilby_parquet)} parquet files into a dataframe with shape {combined_df.shape}')
             combined_df.to_parquet(parquet_name)
@@ -433,10 +436,10 @@ class Plotter:
             print(f'Loaded combined dataframe from {parquet_name} with shape {combined_df.shape}')
 
 if __name__ == "__main__":
-    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.d16.n10.o2.250715075028.pt'
+    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.d32.n16.o2.250715150147.pt'
     plotter = Plotter(datatype='BNS',
                       hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
                       split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')
-    plotter.plot_ssm_predictions(d_input=2, d_model=16, n_layers=10, d_output=2, batch_size=128,
+    plotter.plot_ssm_predictions(d_input=2, d_model=32, n_layers=16, d_output=2, batch_size=2000,
                                  downsample_factor=2, duration=8, scale_factor=1e23,
                                  model_path=model_path, csv_output=True)

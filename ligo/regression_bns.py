@@ -16,7 +16,7 @@ from losses import QuantileLoss
 
 import psutil, os
 
-logger = logging.getLogger('ssm_regression')
+logger = logging.getLogger('ssm_regression_bns')
 
 class SSMRegression():
     def __raise__(self, msg, exc_type=Exception):
@@ -209,7 +209,7 @@ class SSMRegression():
         Supported losses are 'NLLGaussian' and 'Quantile'.
         """
         if self.loss == 'NLLGaussian':
-            criterion = nn.GaussianNLLLoss(reduction='mean', full=False, eps=1e-7)
+            criterion = nn.GaussianNLLLoss(reduction='sum', full=False, eps=1e-7)
             loss_fn = criterion(outputs['mean'], targets, outputs['sigma'])
         elif self.loss == 'Quantile':
             mean_loss = nn.MSELoss(reduction='mean')
@@ -220,6 +220,9 @@ class SSMRegression():
                 q25_loss(outputs['q25'], targets) +
                 q75_loss(outputs['q75'], targets)
             )
+        elif self.loss == 'MSE':
+            criterion = nn.MSELoss(reduction='mean')
+            loss_fn = criterion(outputs['mean'], targets)
         else:
            self.__raise__(f'Unknown loss type: {self.loss}. Supported losses are "NLLGaussian" and "Quantile".', ValueError)
         return loss_fn
@@ -294,66 +297,3 @@ class SSMRegression():
                 self.doc_val.append(eval_loss/(batch_idx+1))
                 torch.cuda.empty_cache()
         return eval_loss / len(self.val_data_loader)
-
-
-if __name__=='__main__':
-    import wandb
-    from datetime import datetime
-
-    task = SSMRegression(d_model=6, n_layers=4, datatype='BNS', loss='NLLGaussian',
-                         train_batch_size=100, val_batch_size=100,
-                         device='cuda',
-                         hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
-                         split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')  # Use precomputed indices file
-    task.build_model()
-    task.setup_optimizer(lr=0.001, weight_decay=0.01)
-
-    timestamp = datetime.now().strftime('%y%m%d%H%M%S')
-    logger.info(f'{timestamp=}')
-    wandb.init(project=f'ssm_{datatag}_regression', name=f'ssm_{datatag}_{timestamp}')
-    EPOCHS = args.epochs
-
-    pbar = tqdm(range(task.start_epoch, EPOCHS))
-    for epoch_number in pbar:
-        avg_train_loss = task.train()
-        avg_val_loss = task.eval(epoch_number, checkpoint=True)
-        if epoch_number == 0:
-            pbar.set_description('Epoch: %d' % (epoch_number))
-        else:
-            pbar.set_description('Epoch: %d | Val loss: %1.3f' % (epoch_number, avg_val_loss))
-        task.scheduler.step()
-
-        wandb.log({
-            'epoch': epoch_number,
-            'train_loss': avg_train_loss,
-            'val_accuracy': avg_val_loss,
-            'learning_rate': task.optimizer.param_groups[0]['lr'],
-            'doc_loss': task.doc_loss,
-            'doc_val': task.doc_val,
-            'model': task.model.state_dict(),
-            'best_loss': task.best_loss,
-            'str_timestamp': timestamp, # timestamp in str format
-            'datatype': task.datatype,
-            'loss': task.loss,
-            'd_input': task.d_input,
-            'd_output': task.d_output,
-            'd_model': task.d_model,
-            'n_layers': task.n_layers,
-            'dropout': task.dropout,
-            'prenorm': task.prenorm,
-            'device': str(task.device),
-            'train_batch_size': task.TRAIN_BATCH_SIZE,
-            'val_batch_size': task.VAL_BATCH_SIZE,
-            'modeldir': task.modeldir,
-            'datadir': task.datadir,
-            'start_epoch': task.start_epoch,
-            'num_epochs': EPOCHS,
-            'optimizer': str(task.optimizer),
-            'scheduler': str(task.scheduler),
-            'comment': args.comment,
-        })
-
-    wandb.finish()
-    save_model_name = os.path.join(task.modeldir, f'model.SSM.{task.datatype}.{task.loss}.d{task.d_model}.n{task.n_layers}.{timestamp}.path')
-    logger.info(f'Saving to {save_model_name}.')
-    torch.save(task.model.state_dict(), save_model_name)

@@ -266,7 +266,7 @@ if __name__=='__main__':
             'doc_val': task.doc_val,
             'model': task.model.state_dict(),
             'best_loss': task.best_loss,
-            'timestamp': timestamp,
+            'str_timestamp': timestamp, # timestamp in str format
             'datatype': task.datatype,
             'loss': task.loss,
             'd_input': task.d_input,

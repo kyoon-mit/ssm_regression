@@ -1,19 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=flow
-#SBATCH --output=logs/flow_%j.out
-#SBATCH --error=logs/flow_%j.err
+#SBATCH --job-name=flow_batch
+#SBATCH --output=/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/logs/flow_%A_%a.out
+#SBATCH --error=/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/logs/flow_%A_%a.err
 #SBATCH --partition=submit-gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=12:00:00
+#SBATCH --mem=5G
+#SBATCH --time=5:00:00
+#SBATCH --array=0-1
 
-# Load conda and activate your environment
-source /work/submit/kyoon/miniforge3/etc/profile.d/conda.sh
-conda activate ssm
+# List of your scripts
+SCRIPTS=(
+/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sho_run_flow.sh
+/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sg_run_flow.sh
+)
 
-# Go to your working directory
-cd /ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression
-
-# Run your script
-python parameter_estimation.py
+bash ${SCRIPTS[$SLURM_ARRAY_TASK_ID]}

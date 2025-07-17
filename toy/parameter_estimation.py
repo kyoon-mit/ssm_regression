@@ -1,7 +1,8 @@
-import os
+import logging
+
+import os, sys
 import torch
-from torch.utils.data import Dataset, DataLoader
-import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from torch import nn, optim
 from nflows.distributions import StandardNormal
 from nflows.flows import Flow
@@ -9,16 +10,20 @@ from nflows.transforms.autoregressive import MaskedAffineAutoregressiveTransform
 from nflows.transforms import CompositeTransform, RandomPermutation
 
 import wandb
-from datetime import datetime
 
-import nflows.utils as torchutils
+sys.path.append('/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/modules')
+from utils import extract_timestamp
 from models import EmbeddingNet
+
+logger = logging.getLogger('flow')
 
 class NormalizingFlow():
     def __init__(
             self,
             datatype='SHO',
             embed_model='', # Path to the pretraining model
+            datasfx='', # suffix for the dataset, e.g., '_sigma0.4_gaussian'
+            batch_size=1000,
             num_transforms=5,
             num_blocks=4,
             hidden_features=30,
@@ -47,7 +52,7 @@ class NormalizingFlow():
             raise ValueError("Pretraining path must be provided.")
         self.pretraining = embed_model
 
-        self.timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+        self.embed_timestamp = extract_timestamp(embed_model, sep='')
         self.num_transforms = num_transforms
         self.num_blocks = num_blocks
         self.hidden_features = hidden_features
@@ -55,14 +60,14 @@ class NormalizingFlow():
         self.num_points = num_points
         self.num_repeats = num_repeats
 
-        self.train_dict = torch.load(os.path.join(self.datadir, 'train.pt'),
+        self.train_dict = torch.load(os.path.join(self.datadir, f'train{datasfx}.pt'),
                                      map_location=self.device, weights_only=True)
-        self.val_dict = torch.load(os.path.join(self.datadir, 'val.pt'),
+        self.val_dict = torch.load(os.path.join(self.datadir, f'val{datasfx}.pt'),
                                      map_location=self.device, weights_only=True)
         self.train_data = DataGenerator(self.train_dict)
         self.val_data = DataGenerator(self.val_dict)
-        self.TRAIN_BATCH_SIZE = 1000
-        self.VAL_BATCH_SIZE = 1000
+        self.TRAIN_BATCH_SIZE = batch_size
+        self.VAL_BATCH_SIZE = batch_size
         self.train_data_loader = DataLoader(
             self.train_data, batch_size=self.TRAIN_BATCH_SIZE,
             shuffle=True
@@ -72,6 +77,8 @@ class NormalizingFlow():
             shuffle=True
         )
         self.flow = nn.Module()
+        self.optimizer = None
+        self.scheduler = None
 
     def build_flow(self):
         print('Building flow.')
@@ -99,6 +106,8 @@ class NormalizingFlow():
         # print number of parameters
         print('Total number of NOT fixed weights in embedding net', sum(p.numel() for p in self.flow._embedding_net.parameters() if p.requires_grad))
         print("Total number of trainable parameters: ", sum(p.numel() for p in self.flow.parameters() if p.requires_grad))
+        self.optimizer = optim.SGD(self.flow.parameters(), lr=1e-4, momentum=0.5)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=3, threshold=0.01)
 
     def train_one_epoch(self, epoch_index):
         self.flow.train(True) # gradient tracking
@@ -106,7 +115,7 @@ class NormalizingFlow():
         last_loss = 0.
 
         for idx, val in enumerate(self.train_data_loader, 1):
-            augmented_theta, _, augmented_data, _ = val
+            _, augmented_theta, _, augmented_data, _, _, _, _, _, _ = val
             augmented_theta = augmented_theta[...,0:2]
 
             theta = augmented_theta.reshape(-1, 2)
@@ -114,9 +123,9 @@ class NormalizingFlow():
 
             flow_loss = - self.flow.log_prob(theta, context=data).mean()
 
-            optimizer.zero_grad()
+            self.optimizer.zero_grad()
             flow_loss.backward()
-            optimizer.step()
+            self.optimizer.step()
 
             running_loss += flow_loss.item()
             if idx % 10 == 0:
@@ -132,7 +141,7 @@ class NormalizingFlow():
         last_loss = 0.
 
         for idx, val in enumerate(self.val_data_loader, 1):
-            augmented_theta, _, augmented_data, _ = val
+            _, augmented_theta, _, augmented_data, _, _, _, _, _, _ = val
             augmented_theta = augmented_theta[...,0:2]
 
             theta = augmented_theta.reshape(-1, 2)
@@ -151,17 +160,15 @@ class NormalizingFlow():
 
 if __name__=='__main__':
 
-    embed_model = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.CNN.SHO.250612151014.path'
-    datatype = 'SHO'
+    embed_model = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250717075146.pt'
+    datatype = 'SineGaussian'
+    datasfx = '_sigma0.4_gaussian'
 
-    task = NormalizingFlow(embed_model=embed_model, datatype=datatype)
+    task = NormalizingFlow(embed_model=embed_model, datatype=datatype, datasfx=datasfx)
     task.build_flow()
     flow = task.flow
 
     wandb.init(project=f'flow_{task.datatype}', name=f'flow_{task.datatype}_{task.timestamp}')
-
-    optimizer = optim.SGD(flow.parameters(), lr=1e-4, momentum=0.5)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, threshold=0.01)
 
     EPOCHS = 200
 
@@ -176,20 +183,20 @@ if __name__=='__main__':
             'epoch': epoch_number,
             'train_loss': avg_train_loss,
             'val_accuracy': avg_val_loss,
-            'lr': optimizer.param_groups[0]['lr'],
+            'lr': task.optimizer.param_groups[0]['lr'],
             'trainable_params': sum(p.numel() for p in flow.parameters() if p.requires_grad),
             'fixed_params': sum(p.numel() for p in flow._embedding_net.parameters() if not p.requires_grad),
             'total_params': sum(p.numel() for p in flow.parameters())
         })
 
-        for param_group in optimizer.param_groups:
+        for param_group in task.optimizer.param_groups:
             print("Current LR = {:.3e}".format(param_group['lr']))
         epoch_number += 1
         try:
-            scheduler.step(avg_val_loss)
+            task.scheduler.step(avg_val_loss)
         except TypeError:
-            scheduler.step()
+            task.scheduler.step()
 
     wandb.finish()
 
-    torch.save(flow.state_dict(), os.path.join(task.modeldir, f'flow.CNN.{task.datatype}.{task.timestamp}.path'))
+    torch.save(flow.state_dict(), os.path.join(task.modeldir, f'flow.CNN.{task.datatype}.{task.embed_timestamp}.pt'))

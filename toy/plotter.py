@@ -484,7 +484,7 @@ class Plotter:
 
         # Redefine the test data loader to iterate over batches
         self.test_data_loader = DataLoader(
-            self.test_data, batch_size=256, num_workers=0,
+            self.test_data, batch_size=batch_size, num_workers=0,
             shuffle=False
         )
 
@@ -549,18 +549,15 @@ class Plotter:
 
         return return_dict
 
-    def plot_ssm_predictions(self, model_path='', save_prefix='ssm', loss='NLLGaussian', csv_output=False):
+    def plot_ssm_predictions(self, d_input, d_model, n_layers, model_path='', save_prefix='ssm', loss='NLLGaussian', csv_output=False):
         timestamp = self.extract_timestamp(model_path, sep='_')
         from models import S4Model
-        if loss=='NLLGaussian':
-            d_input, d_model, n_layers = 1, 6, 4
-        elif loss=='Quantile':
-            d_input, d_model, n_layers = 1, 6, 4
-        else:
-            raise ValueError(f'Unknown loss function: {loss}')
+        if loss=='NLLGaussian': d_output = 18
+        elif loss=='Quantile': d_output = 27
+        else: raise ValueError(f'Unknown loss function: {loss}')
         if not model_path or not os.path.exists(model_path):
             raise ValueError(f"Model path '{model_path}' does not exist or was not provided.")
-        self.ssm_model = S4Model(d_input=d_input, loss=loss, d_model=d_model, n_layers=n_layers, dropout=0.0, prenorm=False)
+        self.ssm_model = S4Model(d_input=d_input, d_output=d_output, d_model=d_model, n_layers=n_layers, dropout=0.0, prenorm=False)
         self.ssm_model = self.ssm_model.to(self.device)
         self.ssm_model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
         self.ssm_model.eval()

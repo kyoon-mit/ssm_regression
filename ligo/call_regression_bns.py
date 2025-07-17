@@ -4,9 +4,13 @@ import argparse
 from regression_bns import SSMRegression
 from tqdm.auto import tqdm
 
-import os
+import os, sys
 import torch
 from datetime import datetime
+
+from pathlib import Path
+sys.path.append(os.path.join(Path(__file__).resolve().parent.parent, 'modules'))
+from utils import configure_logging
 
 def parse_args():
     parser = argparse.ArgumentParser(prog='regression.py')
@@ -67,39 +71,9 @@ def parse_args():
     print(args)
     return args
 
-def configure_logging(logfile, loglevel, timestamp=None):
-    logger = logging.getLogger('ssm_regression')
-    # Remove all existing handlers
-    logger.handlers.clear()
-    match loglevel:
-        case 'notset':
-            logger.setLevel(logging.NOTSET)
-        case 'debug':
-            logger.setLevel(logging.DEBUG)
-        case 'info':
-            logger.setLevel(logging.INFO)
-        case 'warning':
-            logger.setLevel(logging.WARNING)
-        case 'error':
-            logger.setLevel(logging.ERROR)
-        case 'critical':
-            logger.setLevel(logging.CRITICAL)
-    if logfile:
-        if timestamp:
-            logger.info(f'{timestamp=}')
-            logfile = logfile.replace('.log', f'_{timestamp}.log')
-        os.makedirs(os.path.dirname(logfile), exist_ok=True)  # Ensure directory exists
-        file_handler = logging.FileHandler(logfile, 'w+')
-        file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
-        logger.addHandler(file_handler)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.INFO)
-    logger.addHandler(stream_handler)
-    return logger
-
 def main(timestamp=None):
     args = parse_args()
-    logger = configure_logging(logfile=args.logfile, loglevel=args.loglevel, timestamp=timestamp)
+    logger = configure_logging(logname='ssm_regression_bns', logfile=args.logfile, loglevel=args.loglevel, timestamp=timestamp)
 
     datatype = args.datatype
     datatag = 'bns'
@@ -127,6 +101,8 @@ def main(timestamp=None):
         hdf5_path=args.hdf5_path,
         split_indices_file=args.split_indices_file
     )
+    EPOCHS = args.epochs
+    logger.info(f'        epochs={EPOCHS}')
     task.build_model()
     task.setup_optimizer(lr=args.lr, weight_decay=args.weight_decay)
 
@@ -134,7 +110,6 @@ def main(timestamp=None):
         timestamp = datetime.now().strftime('%y%m%d%H%M%S')
     logger.info(f'{timestamp=}')
     wandb.init(project=f'ssm_{datatag}_regression', name=f'ssm_{datatag}_{timestamp}')
-    EPOCHS = args.epochs
 
     pbar = tqdm(range(task.start_epoch, EPOCHS))
     for epoch_number in pbar:

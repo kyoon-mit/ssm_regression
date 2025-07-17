@@ -5,8 +5,8 @@
 #SBATCH --partition=submit-gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=12G
-#SBATCH --time=24:00:00
+#SBATCH --mem=5G
+#SBATCH --time=10:00:00
 #SBATCH --array=0-1
 
 # List of your scripts
