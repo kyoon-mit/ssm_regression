@@ -89,7 +89,7 @@ class QuantileLoss(nn.Module):
         >>> print(loss)  # Output will be the quantile loss value
     """
     def __init__(self, quantile=0.25, reduction='mean'):
-        super().__init__
+        super().__init__()
         self.quantile = quantile
         if reduction not in ['mean', 'sum', 'none']:
             raise ValueError(f"Invalid reduction mode: {reduction}. Choose from 'mean', 'sum', or 'none'.")
@@ -110,4 +110,21 @@ class MultiQuantileLoss(nn.Module):
 
     See (3) of arXiv:2505.18311.
     """
-    pass
+    def __init__(self, quantiles=[0.05, 0.25, 0.5, 0.75, 0.95], reduction='mean'):
+        super().__init__()
+        self.quantiles = torch.tensor(quantiles)
+        if reduction not in ['mean', 'sum', 'none']:
+            raise ValueError(f"Invalid reduction mode: {reduction}. Choose from 'mean', 'sum', or 'none'.")
+        self.reduction = reduction
+    
+    def forward(self, pred, target):
+        z = target - pred
+        loss = torch.where(z > 0, torch.outer(self.quantiles, z), torch.outer((self.quantiles - 1), z))
+        loss = loss.mean(dim=0)
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+        
