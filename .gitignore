@@ -1,0 +1,15 @@
+# Data files
+*.pt
+*.path
+*.hdf5
+*.npz
+
+# Python builds
+__pycache__/
+*.pyc
+
+# Logs and output
+wandb/
+*.log
+*.err
+*.out
