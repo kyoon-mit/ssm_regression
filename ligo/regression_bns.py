@@ -32,6 +32,7 @@ class SSMRegression():
         downsample_factor=1,
         duration=64,
         scale_factor=1.,
+        normalize=False,
         dropout=0.0,
         train_batch_size=100,
         val_batch_size=100,
@@ -91,6 +92,7 @@ class SSMRegression():
             downsample_factor=downsample_factor,
             duration=duration,
             scale_factor=scale_factor,
+            normalize=normalize,
             train_batch_size=self.TRAIN_BATCH_SIZE,
             val_batch_size=self.VAL_BATCH_SIZE,
             train_split=train_split,
@@ -115,6 +117,7 @@ class SSMRegression():
         downsample_factor={downsample_factor},
         duration={duration},
         scale_factor={scale_factor},
+        normalized_data={normalize},
         dropout={self.dropout},
         train_batch_size={self.TRAIN_BATCH_SIZE},
         val_batch_size={self.VAL_BATCH_SIZE},
@@ -209,7 +212,7 @@ class SSMRegression():
         Supported losses are 'NLLGaussian' and 'Quantile'.
         """
         if self.loss == 'NLLGaussian':
-            criterion = nn.GaussianNLLLoss(reduction='sum', full=False, eps=1e-7)
+            criterion = nn.GaussianNLLLoss(reduction='mean', full=False, eps=1e-9)
             loss_fn = criterion(outputs['mean'], targets, outputs['sigma'])
         elif self.loss == 'Quantile':
             mean_loss = nn.MSELoss(reduction='mean')
@@ -232,15 +235,15 @@ class SSMRegression():
         mass_1 = params['mass_1'].to(self.device)
         mass_2 = params['mass_2'].to(self.device)
         chirp_mass = (mass_1 * mass_2)**(3/5) / (mass_1 + mass_2)**(1/5)
-        # mass_ratio = mass_2 / mass_1
+        mass_ratio = mass_2 / mass_1
         # total_mass = mass_1 + mass_2
         # right_ascension = params['ra'].to(self.device)
         # declination = params['dec'].to(self.device)
-        # redshift = params['redshift'].to(self.device)
+        redshift = params['redshift'].to(self.device)
         # theta_jn = params['theta_jn'].to(self.device)
 
         inputs = torch.stack([h1.to(self.device), l1.to(self.device)], dim=2)
-        targets = torch.stack([chirp_mass], dim=1)
+        targets = torch.stack([chirp_mass, mass_ratio, redshift], dim=1)
         # targets = torch.stack([mass_1, mass_2], dim=1)
         # targets = torch.stack([mass_1, mass_2,
         #                        chirp_mass, mass_ratio, total_mass,

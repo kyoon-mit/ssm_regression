@@ -57,10 +57,13 @@ def parse_args():
                         default=2,
                         help='Downsampling factor')
     parser.add_argument('--duration', type=int,
-                        default=4, help='Duration of the coalescence')
+                        default=4, help='Duration of the coalescence.')
     parser.add_argument('--scale_factor', type=float,
                         default=1.,
-                        help='Scale factor')
+                        help='Scale factor.')
+    parser.add_argument('--normalize', type=bool,
+                        default=False,
+                        help='Whether to normalize data.')
     parser.add_argument('--logfile', type=str, default=None, help='Name of the log file.')
     parser.add_argument('--loglevel', type=str, default='info',
                         choices=['notset', 'debug', 'info', 'warning', 'error', 'critical'],
@@ -92,6 +95,7 @@ def main(timestamp=None):
         downsample_factor=args.downsample_factor,
         duration=args.duration,
         scale_factor=args.scale_factor,
+        normalize=args.normalize,
         dropout=args.dropout,
         datatype=args.datatype,
         loss=args.loss,
@@ -102,7 +106,7 @@ def main(timestamp=None):
         split_indices_file=args.split_indices_file
     )
     EPOCHS = args.epochs
-    logger.info(f'        epochs={EPOCHS}')
+    logger.info(f'\n        epochs={EPOCHS}')
     task.build_model()
     task.setup_optimizer(lr=args.lr, weight_decay=args.weight_decay)
 

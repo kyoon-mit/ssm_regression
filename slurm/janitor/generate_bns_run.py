@@ -13,6 +13,8 @@ def main():
     parser.add_argument('--downsample_factor', type=int, default=2, help='Downsampling factor')
     parser.add_argument('--duration', type=int, default=4, help='Duration of the coalescence')
     parser.add_argument('--scale_factor', type=float, default=1., help='Scale factor')
+    parser.add_argument('--normalize', type=bool, default=False, help='Normalize data')
+    parser.add_argument('--learning_rate', type=float, default=0.01, help='Learning rate')
     parser.add_argument('--comment', type=str, default='', help='Additional comment for the run')
     args = parser.parse_args()
     print(args)
@@ -43,10 +45,13 @@ python ${{BASE_DIR}}/ligo/call_regression_bns.py -t BNS \\
 --downsample_factor {args.downsample_factor} \\
 --duration {args.duration} \\
 --scale_factor {args.scale_factor} \\
+--normalize {args.normalize} \\
+--lr {args.learning_rate} \\
 --logfile="${{BASE_DIR}}/slurm/logs/bns_regression.log" \\
 --comment="BNS injection (20000 samples); loss=NLLGaussian;
 d_model={args.d_model}, n_layers={args.n_layers}; d_output={args.d_output};
 downsample_factor={args.downsample_factor}, duration={args.duration}, scale_factor={args.scale_factor};
+normalize={args.normalize};
 {args.comment}"
 '''
 

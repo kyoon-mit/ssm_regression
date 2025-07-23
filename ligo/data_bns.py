@@ -36,11 +36,16 @@ class DataGenerator(Dataset):
         h1 = h1[start_idx:]
         l1 = l1[start_idx:]
 
+        if self.normalize:
+            h1 = (h1 - h1.mean()) / (h1.std())
+            l1 = (l1 - l1.mean()) / (l1.std())
+            
         # Load parameters as a dictionary
         params = {k: torch.tensor(self.param_group[k][idx], dtype=torch.float32) for k in self.keys}
         return (h1, l1, params, idx)
 
-def get_dataloaders(hdf5_path, downsample_factor=1, duration=64, scale_factor=1.,
+def get_dataloaders(hdf5_path,
+                    downsample_factor=1, duration=64, scale_factor=1., normalize=False,
                     train_batch_size=1000, val_batch_size=1000, test_batch_size=1000,
                     train_split=0.8, test_split=0.1,
                     split_indices_file='', random_seed=42):
@@ -48,7 +53,7 @@ def get_dataloaders(hdf5_path, downsample_factor=1, duration=64, scale_factor=1.
     import numpy as np
     from torch.utils.data import DataLoader, Subset
     dataset = DataGenerator(hdf5_path, downsample_factor=downsample_factor,
-                            duration=duration, scale_factor=scale_factor)
+                            normalize=normalize, duration=duration, scale_factor=scale_factor)
     if split_indices_file:
         if not split_indices_file.endswith('.npz'):
             raise ValueError("split_indices_file must be a .npz file containing precomputed indices.")

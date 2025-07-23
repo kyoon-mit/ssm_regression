@@ -57,13 +57,13 @@ class Plotter:
         #     'total_mass', 'right_ascension', 'declination', 'redshift', 'theta_jn']
         # self.param_latex = [r'$m_1$', r'$m_2$', r'$\mathcal{M}$', r'$q$',
         #     r'$M$', r'$\alpha$', r'$\delta$', r'$z$', r'$\theta_{\mathrm{JN}}$']
-        self.param_list = ['chirp_mass']
-        self.param_latex = ['\mathcal{M}']
+        self.param_list = ['chirp_mass', 'mass_ratio', 'redshift']
+        self.param_latex = ['\mathcal{M}', 'q', 'z']
 
         # Placeholders
         self.ssm_model = nn.Module()
 
-    def __savefig___(self, plot, save_name):
+    def __savefig__(self, plot, save_name):
         save_name = os.path.join(self.save_path, save_name)
         plot.savefig(save_name, bbox_inches='tight')
         print(f'Saved {save_name}.')
@@ -84,8 +84,9 @@ class Plotter:
         import pandas as pd
 
         df = pd.DataFrame(outputs)
-        df.to_csv(os.path.join(self.save_path, filename), index=False)
-        print(f'Dumped results to {filename}')
+        csv_name = os.path.join(self.save_path, filename)
+        df.to_csv(csv_name, index=False)
+        print(f'Dumped results to {csv_name}')
         return df
 
     # Define loss function
@@ -135,12 +136,12 @@ class Plotter:
         # truths = torch.stack([mass_1, mass_2,
         #                       chirp_mass, mass_ratio, total_mass,
         #                       right_ascension, declination, redshift, theta_jn], dim=1)
-        truths = torch.stack([chirp_mass], dim=1)
+        truths = torch.stack([chirp_mass, mass_ratio, redshift], dim=1)
         return inputs, truths
 
     def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16,
-                         downsample_factor=1, duration=64, scale_factor=1.,
-                         compute_on_cpu=False, csv_output=False, timestamp=''):
+                         downsample_factor=1, normalize=False, duration=64, scale_factor=1.,
+                         compute_on_cpu=False, save_prefix='ssm', csv_output=False, timestamp=''):
         """
         Computes predictions and truths for the SSM model on the test data.
 
@@ -149,10 +150,12 @@ class Plotter:
             loss (str): Loss function used in the model ('NLLGaussian' or 'Quantile').
             batch_size (int): Number of samples to process in each batch.
             downsample_factor (int): Downsampling factor.
+            normalize (bool): Whether the data is normalized.
             duration (int): Duration of signal in seconds.
             scale_factor (float): Amplitude scale factor.
             compute_on_cpu (bool): If True, move computations to CPU.
             csv_output (bool): If True, save outputs to a CSV file.
+            save_prefix (str): Save prefix for the csv file.
             timestamp (str): Timestamp to append to the output filename.
 
         Returns:
@@ -166,6 +169,9 @@ class Plotter:
         def maketensor(d):
             return {k: torch.tensor(v) for k, v in d.items()}
         
+        def makesqrttensor(d):
+            return {k: torch.sqrt(torch.tensor(v)) for k, v in d.items()}
+        
         pred_dict, truth_dict = dinit('pred'), dinit('truth')
         loss_per_sample = []
         if loss=='NLLGaussian':
@@ -174,6 +180,20 @@ class Plotter:
             pred_q25_dict, pred_q75_dict = dinit('q25'), dinit('q75')
         else:
             raise ValueError(f'Unknown loss function: {loss}')
+        
+        csv_fname = f'{save_prefix}_{self.datatype}_{loss}{timestamp}_outputs.csv'
+        csv_name = os.path.join(self.save_path, csv_fname)
+        # Check if CSV file exists
+        if os.path.exists(csv_name):
+            print(f'{csv_name} exists.\nOpening CSV file instead of recomputing ssm model.')
+            import pandas as pd
+            df = pd.read_csv(csv_name)
+            # Make modifications here
+            # for i in range(len(self.param_list)):
+            #     p = self.param_list[i]
+            #     df[f'sigma_{p}'] = np.sqrt(df[f'sigma_{p}'])
+            return_dict = {key: torch.tensor(value) for key, value in df.items()}
+            return return_dict
 
         device = next(ssm_model.parameters()).device
         ssm_model.eval()
@@ -183,6 +203,7 @@ class Plotter:
             hdf5_path=self.hdf5_path,
             test_batch_size=batch_size,
             downsample_factor=downsample_factor,
+            normalize=normalize,
             duration=duration,
             scale_factor=scale_factor,
             train_split=0.8,
@@ -223,19 +244,18 @@ class Plotter:
         return_dict.update(maketensor(truth_dict))
 
         if loss=='NLLGaussian':
-            return_dict.update(maketensor(pred_sigma_dict))
+            return_dict.update(makesqrttensor(pred_sigma_dict))
         elif loss=='Quantile':
             return_dict.update(maketensor(pred_q25_dict))
             return_dict.update(maketensor(pred_q75_dict))
 
         if csv_output:
-            csv_name = f'ssm_{self.datatype}_{loss}{timestamp}_outputs.csv'
             self.dump_to_csv(return_dict, filename=csv_name)
 
         return return_dict
 
     def plot_ssm_predictions(self, d_input, d_model, d_output, n_layers, model_path='', batch_size=16,
-                             downsample_factor=1, duration=64, scale_factor=1.,
+                             downsample_factor=1, normalize=False, duration=64, scale_factor=1.,
                              save_prefix='ssm', loss='NLLGaussian', csv_output=False):
         timestamp = extract_timestamp(model_path, sep='_')
         from models import S4Model
@@ -246,9 +266,13 @@ class Plotter:
         self.ssm_model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
         self.ssm_model.eval()
 
-        ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=batch_size,
-                                            downsample_factor=downsample_factor, duration=duration, scale_factor=scale_factor,
-                                            compute_on_cpu=False, csv_output=csv_output, timestamp=timestamp)
+        ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss,
+                                            batch_size=batch_size,
+                                            downsample_factor=downsample_factor,
+                                            normalize=normalize, duration=duration,
+                                            scale_factor=scale_factor,
+                                            compute_on_cpu=False, save_prefix=save_prefix,
+                                            csv_output=csv_output, timestamp=timestamp)
 
         # Get differences between predictions and truths
         ssm_diffs, ssm_z_scores, ssm_uncertainties = [], [], []
@@ -265,9 +289,9 @@ class Plotter:
             else:
                 raise ValueError(f'Invalid {loss=}.')
             ssm_uncertainties.append(uncertainty.numpy())
-            labels_diffs.append(fr'$\hat{platex} - {platex}$')
-            labels_z_scores.append(fr'$(\hat{platex} - {platex})/\sigma_{platex}$')
-            labels_uncertainties.append(fr'$\sigma_{platex}')
+            labels_diffs.append(fr'$\hat{{{platex}}} - {platex}$')
+            labels_z_scores.append(fr'$(\hat{{{platex}}} - {platex})/\hat\sigma_{{{platex}}}$')
+            labels_uncertainties.append(fr'$\hat\sigma_{platex}')
         ssm_diffs_stacked, ssm_z_scores_stacked, ssm_uncertainties_stacked =\
             np.stack(ssm_diffs, axis=1), np.stack(ssm_z_scores, axis=1), np.stack(ssm_uncertainties, axis=1)
         
@@ -293,7 +317,9 @@ class Plotter:
             counts_preds, bins_preds, patches_preds = ax1.hist(
                 preds,
                 alpha=0.5,
-                label=f'$\\hat{{{platex}}}$',
+                label=fr'$\hat{{{platex}}}$',
+                bins=40,
+                histtype='step',
                 color='blue'
             )
 
@@ -301,13 +327,17 @@ class Plotter:
                 truths,
                 alpha=0.5,
                 label=fr'${platex}$',
+                bins=40,
+                histtype='step',
                 color='red'
             )
 
             counts_diff, bins_diff, patches_diff = ax2.hist(
                 (preds - truths)/sigma,
                 alpha=0.5,
-                label=f'$(\\hat{{{platex}}}/{platex})/\\sigma_{{{platex}}}$',
+                label=fr'$(\hat {{{platex}}}-{platex})/\hat\sigma_{{{platex}}}$',
+                bins=40,
+                histtype='step',
                 color='purple'
             )
 
@@ -322,8 +352,8 @@ class Plotter:
             ax2.legend()
 
             if self.save_path is not None:
-                self.__savefig___(fig1, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_hist_{param}.png')
-                self.__savefig___(fig2, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_diff_{param}.png')
+                self.__savefig__(fig1, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_hist_{param}.png')
+                self.__savefig__(fig2, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_z_score_{param}.png')
             else:
                 fig1.tight_layout()
                 fig1.show()
@@ -372,24 +402,24 @@ class Plotter:
         figure_z_scores.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
         figure_z_scores.subplots_adjust(top=0.87)
 
-        # Plot loss per sample
-        figure_loss = corner.corner(
-            loss_per_sample,
-            quantiles=[0.16, 0.5, 0.84],
-            labels=[f'{loss} loss per sample'],
-            show_titles=True,
-            title_kwargs={"fontsize": 12},
-            label_kwargs={"fontsize": 12},
-            title_fmt='.2f',
-            color='C7'
-        )
-        figure_loss.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        # TODO: Plot loss per sample
+        # figure_loss = corner.corner(
+        #     loss_per_sample,
+        #     quantiles=[0.16, 0.5, 0.84],
+        #     labels=[f'{loss} loss per sample'],
+        #     show_titles=True,
+        #     title_kwargs={"fontsize": 12},
+        #     label_kwargs={"fontsize": 12},
+        #     title_fmt='.2f',
+        #     color='C7'
+        # )
+        # figure_loss.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
 
         # Save the figures
         if self.save_path is not None:
-            figure_diffs.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_diffs.png'), bbox_inches='tight')
-            figure_uncertainties.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_uncertainties.png'), bbox_inches='tight')
-            figure_z_scores.savefig(os.path.join(self.save_path, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_z_scores.png'), bbox_inches='tight')
+            self.__savefig__(figure_diffs, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_corner_diffs.png')
+            self.__savefig__(figure_uncertainties, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_corner_uncertainties.png')
+            self.__savefig__(figure_z_scores, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_corner_z_scores.png')
         else:
             figure_diffs.tight_layout()
             figure_diffs.show()
@@ -436,10 +466,10 @@ class Plotter:
             print(f'Loaded combined dataframe from {parquet_name} with shape {combined_df.shape}')
 
 if __name__ == "__main__":
-    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.d32.n16.o2.250715150147.pt'
+    model_path = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/output/model.SSM.BNS.NLLGaussian.d16.n10.o6.250722111023.pt'
     plotter = Plotter(datatype='BNS',
                       hdf5_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_waveforms.hdf5',
                       split_indices_file='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/BNS/bns_data_indices.npz')
-    plotter.plot_ssm_predictions(d_input=2, d_model=32, n_layers=16, d_output=2, batch_size=2000,
-                                 downsample_factor=2, duration=8, scale_factor=1e23,
-                                 model_path=model_path, csv_output=True)
+    plotter.plot_ssm_predictions(d_input=2, d_model=16, n_layers=10, d_output=6, batch_size=500,
+                                 downsample_factor=1, normalize=False, duration=8, scale_factor=1e25,
+                                 save_prefix='ssm_d16_n10_o6', model_path=model_path, csv_output=True)
