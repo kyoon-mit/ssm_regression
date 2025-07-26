@@ -568,7 +568,6 @@ class Plotter:
             flow_outputs = self.flow_compute_vals(
                 embed_hidden_layers=embed_hidden_layers, batch_size=1000,
                 embed_path=embed_path, flow_path=flow_path, csv_output=csv_output)
-            print(flow_outputs['pred_omega'].shape)
             omega_diffs, omega_z_scores = self.compute_z_scores(flow_outputs['pred_omega'], flow_outputs['pred_sigma_omega'], flow_outputs['truth_omega'])
             beta_diffs, beta_z_scores   = self.compute_z_scores(flow_outputs['pred_beta'], flow_outputs['pred_sigma_beta'], flow_outputs['truth_beta'])
             flow_z_scores_stacked = np.stack(
@@ -583,9 +582,6 @@ class Plotter:
         # Get differences between predictions and truths
         param1_diff, param1_z_score = self.compute_z_scores(ssm_outputs['pred_param1'], ssm_outputs['pred_sigma1'], ssm_outputs['truth_param1'])
         param2_diff, param2_z_score = self.compute_z_scores(ssm_outputs['pred_param2'], ssm_outputs['pred_sigma2'], ssm_outputs['truth_param2'])
-
-        print(param1_diff.shape)
-        print(omega_diffs.shape)
 
         # Stack into (N, 2) array
         ssm_diffs_stacked, ssm_z_scores_stacked = np.stack(
@@ -652,14 +648,17 @@ class Plotter:
             title_fmt='.2f',
             color='purple'
         )
-        figure_z_scores.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
-        figure_z_scores.subplots_adjust(top=0.87)
         if plot_flow:
             corner.corner(
                 flow_z_scores_stacked,
                 fig=figure_z_scores,
-                color='gray'
+                color='gray',
+                show_titles=False,
+                title_kwargs={"fontsize": 12},
+                label_kwargs={"fontsize": 12}
             )
+        figure_z_scores.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        figure_z_scores.subplots_adjust(top=0.87)
 
         # Plot loss per sample
         # figure_loss = corner.corner(
@@ -739,13 +738,14 @@ if __name__ == "__main__":
         plot_flow=True, embed_hidden_layers=3,
         embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250722152036.pt',
         flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250722152036.250723151905.pt')
-    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250721001207.path',
-    #     d_model=3, n_layers=10,
-    #     save_prefix='ssm_d3_n10_fast', loss='NLLGaussian', csv_output=True)
-    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.Quantile.20250528-013120.path',
-    #                              save_prefix='ssm', loss='Quantile')
-    # plotter.plot_bilby()
-
+    plotter.plot_ssm_predictions(
+        model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250721083326.path',
+        d_model=6, n_layers=4,
+        save_prefix='ssm_d6_n4', loss='NLLGaussian', csv_output=True,
+        plot_flow=True, embed_hidden_layers=3,
+        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250722152036.pt',
+        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250722152036.250723151905.pt')
+    
     plotter = Plotter(datatype='SineGaussian', datasfx='_sigma0.4_gaussian')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250720075718.pt',
     #                         num_hidden_layers_h=2)
@@ -753,10 +753,17 @@ if __name__ == "__main__":
     #     embed_hidden_layers=3,
     #     embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250722152036.pt',
     #     flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250722152036.250723151905.pt')
-    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.Quantile.250724123053.path',
-    #     d_model=6, n_layers=4,
-    #     save_prefix='ssm_d6_n4', loss='Quantile', csv_output=True)
-    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.Quantile.20250528-005641.path',
-    #                              save_prefix='ssm', loss='Quantile')
-    # plotter.plot_bilby()
-    # Replace '/path/to/your/model.pth' with the actual path to your trained model
+    plotter.plot_ssm_predictions(
+        model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.Quantile.250725074703.path',
+        d_model=6, n_layers=4,
+        save_prefix='ssm_d6_n4', loss='Quantile', csv_output=True,
+        plot_flow=True, embed_hidden_layers=3,
+        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250722152036.pt',
+        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250722152036.250723151905.pt')
+    plotter.plot_ssm_predictions(
+        model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250721085653.path',
+        d_model=6, n_layers=4,
+        save_prefix='ssm_d6_n4', loss='NLLGaussian', csv_output=True,
+        plot_flow=True, embed_hidden_layers=3,
+        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250722152036.pt',
+        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250722152036.250723151905.pt')
