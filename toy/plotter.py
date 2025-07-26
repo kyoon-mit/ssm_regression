@@ -251,55 +251,21 @@ class Plotter:
         )
         return
     
-    def flow_compute_vals(self, flow, test_data_loader, batch_size=16, num_samples=1000):
+    def flow_compute_vals(self, embed_path, flow_path,
+                          embed_hidden_layers=2, save_prefix='flow',
+                          batch_size=256, num_samples=1000, csv_output=False):
         compute_on_cpu = True if self.device==torch.device('cpu') else False
-        pred_omega, truth_omega = [], []
-        pred_beta, truth_beta = [], []
-        pred_sigma_omega = []
-        pred_sigma_beta = []
-
-        batch_contexts, batch_truths = [], []
-        for idx, (theta_test, _, data_test, _, _) in enumerate(test_data_loader):
-            batch_contexts.append(data_test[0][0].reshape(1, 1, 200)) # shape: (1, 1, 200)
-            batch_truths.append(theta_test[0][0, :2])
-
-            # Process in batches
-            if (idx + 1) % batch_size == 0 or (idx + 1) == len(test_data_loader):
-                contexts = torch.cat(batch_contexts, dim=0).to(self.device) # (B, 1, 200)
-                truths = torch.stack(batch_truths).to(self.device) # (B, 2)
-
-                with torch.no_grad():
-                    samples = flow.sample(num_samples, context=contexts) # (B, num_samples, param_dim)
-
-                samples = samples[..., :2] # (B, num_samples, 2)
-
-                # Move samples to CPU if required
-                if compute_on_cpu:
-                    samples = samples.cpu()
-                    truths = truths.cpu()
-                
-                preds  = samples.mean(dim=1) # (B, 2)
-                sigmas = samples.std(dim=1)
-                
-                pred_omega.extend(preds[:, 0].tolist())
-                pred_beta.extend(preds[:, 1].tolist())
-                truth_omega.extend(truths[:, 0].tolist())
-                truth_beta.extend(truths[:, 1].tolist())
-                pred_sigma_omega.extend(sigmas[:, 0].tolist())
-                pred_sigma_beta.extend(sigmas[:, 1].tolist())
-
-                # Clear for next batch
-                batch_contexts = []
-                batch_truths = []
-
-        pred_omega, truth_omega = torch.tensor(pred_omega), torch.tensor(truth_omega)
-        pred_beta, truth_beta = torch.tensor(pred_beta), torch.tensor(truth_beta)
-        pred_sigma_omega = torch.tensor(pred_sigma_omega)
-        pred_sigma_beta = torch.tensor(pred_sigma_beta)
-
-        return pred_omega, truth_omega, pred_beta, truth_beta, pred_sigma_omega, pred_sigma_beta
-
-    def plot_flow(self, embed_path='', flow_path='', save_prefix='flow'):
+        timestamp = extract_timestamp(flow_path, sep='_')
+        csv_fname = f'{save_prefix}_{self.datatype}{timestamp}_outputs.csv'
+        csv_name = os.path.join(self.save_path, csv_fname)
+        # Check if CSV file exists
+        if os.path.exists(csv_name):
+            print(f'{csv_name} exists.\nOpening CSV file instead of recomputing flow model.')
+            import pandas as pd
+            df = pd.read_csv(csv_name)
+            flow_outputs = {key: torch.tensor(value) for key, value in df.items()}
+            return flow_outputs
+        
         if not embed_path or not os.path.exists(embed_path):
             raise ValueError(f"Embedding model path '{embed_path}' does not exist or was not provided.")
         if not flow_path or not os.path.exists(flow_path):
@@ -307,26 +273,75 @@ class Plotter:
         timestamp = extract_timestamp(embed_path, sep='_')
         from parameter_estimation import NormalizingFlow
         nf = NormalizingFlow(datatype=self.datatype, embed_model=embed_path,
+                             embed_hidden_layers=embed_hidden_layers,
+                             hidden_features=30,
                              device=self.device, load_data=False)
         nf.build_flow()
         flow = nf.flow
         flow.load_state_dict(torch.load(flow_path, map_location=self.device, weights_only=True))
         flow.eval()
-        print('Computing values.')    
-        (pred_omega,
-        truth_omega,
-        pred_beta,
-        truth_beta,
-        pred_sigma_omega,
-        pred_sigma_beta,
-        ) = self.flow_compute_vals(
-            flow=flow,
-            test_data_loader=self.test_data_loader,
-            batch_size=16,
-            num_samples=1000,
+
+        pred_omega, truth_omega = [], []
+        pred_beta, truth_beta = [], []
+        pred_sigma_omega = []
+        pred_sigma_beta = []
+
+        batch_contexts, batch_truths = [], []
+        # Redefine the test data loader to iterate over batches
+        self.test_data_loader = DataLoader(
+            self.test_data, batch_size=batch_size, num_workers=0,
+            shuffle=False
         )
-        omega_diffs, omega_z_scores = self.compute_z_scores(pred_omega, pred_sigma_omega, truth_omega)
-        beta_diffs, beta_z_scores = self.compute_z_scores(pred_beta, pred_sigma_beta, truth_beta)
+        for idx, (_, truths, _, data_test, _) in enumerate(self.test_data_loader):
+            # (B, num_repeat, 3(p1,p2,shift)), (B, num_repeat, L(t_vals))
+            truths = truths[:,0,0:2] # (B, 2(p1,p2))
+            # data_test = data_test.reshape(-1, 1, data_test.shape[2]) # (B, 1, L(t_vals))
+            data_test = data_test[:,0:1,:] # (B, 1, L(t_vals))
+
+            with torch.no_grad():
+                samples = flow.sample(num_samples, context=data_test) # (B, num_samples, 2)
+
+            # Move samples to CPU if required
+            if compute_on_cpu:
+                samples = samples.cpu()
+                truths = truths.cpu()
+            
+            preds  = samples.mean(dim=1) # (B, 2)
+            sigmas = samples.std(dim=1) # (B, 2)
+            
+            pred_omega.extend(preds[:, 0].tolist())
+            pred_beta.extend(preds[:, 1].tolist())
+            truth_omega.extend(truths[:, 0].tolist())
+            truth_beta.extend(truths[:, 1].tolist())
+            pred_sigma_omega.extend(sigmas[:, 0].tolist())
+            pred_sigma_beta.extend(sigmas[:, 1].tolist())
+
+        pred_omega, truth_omega = torch.tensor(pred_omega), torch.tensor(truth_omega)
+        pred_beta, truth_beta = torch.tensor(pred_beta), torch.tensor(truth_beta)
+        pred_sigma_omega = torch.tensor(pred_sigma_omega)
+        pred_sigma_beta = torch.tensor(pred_sigma_beta)
+
+        flow_outputs = {
+            'pred_omega': pred_omega,
+            'truth_omega': truth_omega,
+            'pred_beta': pred_beta,
+            'truth_beta': truth_beta,
+            'pred_sigma_omega': pred_sigma_omega,
+            'pred_sigma_beta': pred_sigma_beta,
+        }
+
+        if csv_output:
+            self.dump_to_csv(flow_outputs, filename=csv_fname)
+
+        return flow_outputs
+
+    def plot_flow(self, embed_path='', embed_hidden_layers=2, flow_path='', save_prefix='flow', csv_output=False):
+        flow_outputs = self.flow_compute_vals(embed_hidden_layers=embed_hidden_layers,
+                                              embed_path=embed_path, flow_path=flow_path,
+                                              save_prefix=save_prefix, csv_output=csv_output)
+        timestamp = extract_timestamp(flow_path, sep='_')
+        omega_diffs, omega_z_scores = self.compute_z_scores(flow_outputs['pred_omega'], flow_outputs['pred_sigma_omega'], flow_outputs['truth_omega'])
+        beta_diffs, beta_z_scores = self.compute_z_scores(flow_outputs['pred_beta'], flow_outputs['pred_sigma_beta'], flow_outputs['truth_beta'])
         # Stack into (N, 2) array
         diffs_stacked = np.stack(
             [omega_diffs.numpy(), beta_diffs.numpy()],
@@ -337,7 +352,7 @@ class Plotter:
             axis=1
         )
         labels_diffs = [r'$\hat{\omega}_0 - \omega_0$', r'$\hat{\beta} - \beta$']
-        labels_z_scores = [r'$(\hat{\omega}_0 - \omega_0)$/$\sigma_{\omega_0}$', r'$(\hat{\beta} - \beta)$/$\sigma_\beta$']
+        labels_z_scores = [r'$(\hat{\omega}_0 - \omega_0)$/$\hat{\sigma}_{\omega_0}$', r'$(\hat{\beta} - \beta)$/$\hat{\sigma}_\beta$']
         figure_diffs = corner.corner(
             diffs_stacked,
             quantiles=[0.16, 0.5, 0.84],
@@ -417,8 +432,8 @@ class Plotter:
         elif loss == 'Quantile':
             from losses import QuantileLoss
             mean_loss = nn.MSELoss(reduction=reduction)
-            q25_loss = QuantileLoss(quantile=0.25, reduction=reduction)
-            q75_loss = QuantileLoss(quantile=0.75, reduction=reduction)
+            q25_loss = QuantileLoss(quantile=0.1587, reduction=reduction)
+            q75_loss = QuantileLoss(quantile=0.8413, reduction=reduction)
             loss_fn = (
                 mean_loss(outputs[:,0:2], targets) +
                 q25_loss(outputs[:,2:4], targets) +
@@ -444,7 +459,6 @@ class Plotter:
         Returns:
             dict: Dictionary containing predictions and truths.
         """
-
         pred_param1, truth_param1 = [], []
         pred_param2, truth_param2 = [], []
         loss_per_sample = []
@@ -456,8 +470,6 @@ class Plotter:
         else:
             raise ValueError(f'Unknown loss function: {loss}')
 
-        batch_contexts, batch_truths = [], []
-
         csv_fname = f'{save_prefix}_{self.datatype}_{loss}{timestamp}_outputs.csv'
         csv_name = os.path.join(self.save_path, csv_fname)
         # Check if CSV file exists
@@ -466,8 +478,8 @@ class Plotter:
             import pandas as pd
             df = pd.read_csv(csv_name)
             # Make modifications here
-            df['pred_sigma1'] = np.sqrt(df['pred_sigma1'])
-            df['pred_sigma2'] = np.sqrt(df['pred_sigma2'])
+            # df['pred_sigma1'] = np.sqrt(df['pred_sigma1'])
+            # df['pred_sigma2'] = np.sqrt(df['pred_sigma2'])
             return_dict = {key: torch.tensor(value) for key, value in df.items()}
             return return_dict
 
@@ -481,46 +493,32 @@ class Plotter:
         )
 
         for idx, vals in enumerate(self.test_data_loader):
-            inputs, truths = self.ssm_reshaping(vals, output_dim=2)
-            batch_contexts.append(inputs)  # shape: (1, 1, 200)
-            batch_truths.append(truths)  # shape: (1, 2)
+            inputs, truths = self.ssm_reshaping(vals, output_dim=2) # (B, L(t_vals), 2), (B, 2)
 
-            # Process in batches
-            if (idx + 1) % batch_size == 0 or (idx + 1) == len(self.test_data_loader):
-                contexts = torch.cat(batch_contexts, dim=0).to(device)  # (B, 1, 200)
-                truths = torch.cat(batch_truths).to(device) # (B, 2)
+            with torch.no_grad():
+                preds = ssm_model(inputs) # (B, d_output)
 
-                with torch.no_grad():
-                    preds = ssm_model(contexts)
+            # Move samples to CPU if required
+            if compute_on_cpu:
+                preds = preds.cpu()
+                truths = truths.cpu()
+            
+            pred_param1.extend(preds[:, 0].tolist())
+            pred_param2.extend(preds[:, 1].tolist())
+            truth_param1.extend(truths[:, 0].tolist())
+            truth_param2.extend(truths[:, 1].tolist())
+            l = self.compute_loss(loss, preds, truths, reduction='none')
+            l = l.mean(dim=1, keepdim=False).tolist()
+            loss_per_sample.extend(l)
 
-                if preds.ndim == 3:
-                    preds = preds.squeeze(1)  # e.g., (B, 1, N) → (B, N)
-
-                # Move samples to CPU if required
-                if compute_on_cpu:
-                    preds = preds.cpu()
-                    truths = truths.cpu() # (B, 2)
-                
-                pred_param1.extend(preds[:, 0].tolist())
-                pred_param2.extend(preds[:, 1].tolist())
-                truth_param1.extend(truths[:, 0].tolist())
-                truth_param2.extend(truths[:, 1].tolist())
-                l = self.compute_loss(loss, preds, truths, reduction='none')
-                l = l.mean(dim=1, keepdim=False).tolist()
-                loss_per_sample.extend(l)
-
-                if loss == 'NLLGaussian':
-                    pred_sigma1.extend(preds[:, 2].tolist())
-                    pred_sigma2.extend(preds[:, 3].tolist())
-                elif loss == 'Quantile':
-                    pred_q25_1.extend(preds[:, 2].tolist())
-                    pred_q25_2.extend(preds[:, 3].tolist())
-                    pred_q75_1.extend(preds[:, 4].tolist())
-                    pred_q75_2.extend(preds[:, 5].tolist())
-
-                # Clear for next batch
-                batch_contexts.clear()
-                batch_truths.clear()
+            if loss == 'NLLGaussian':
+                pred_sigma1.extend(preds[:, 2].tolist())
+                pred_sigma2.extend(preds[:, 3].tolist())
+            elif loss == 'Quantile':
+                pred_q25_1.extend(preds[:, 2].tolist())
+                pred_q25_2.extend(preds[:, 3].tolist())
+                pred_q75_1.extend(preds[:, 4].tolist())
+                pred_q75_2.extend(preds[:, 5].tolist())
 
         return_dict = {
             'pred_param1': torch.tensor(pred_param1),
@@ -546,7 +544,8 @@ class Plotter:
         return return_dict
 
     def plot_ssm_predictions(self, d_model, n_layers,
-            model_path='', save_prefix='ssm', loss='NLLGaussian', csv_output=False):
+            model_path='', save_prefix='ssm', loss='NLLGaussian', csv_output=False,
+            plot_flow=False, embed_hidden_layers=2, embed_path='', flow_path=''):
         timestamp = extract_timestamp(model_path, sep='_')
         from models import S4Model
         if loss=='NLLGaussian': d_output = 4
@@ -562,47 +561,49 @@ class Plotter:
         )
         self.ssm_model.eval()
 
-        ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=16,
+        ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=1000,
             compute_on_cpu=False, csv_output=csv_output, save_prefix=save_prefix, timestamp=timestamp)
+        
+        if plot_flow:
+            flow_outputs = self.flow_compute_vals(
+                embed_hidden_layers=embed_hidden_layers, batch_size=1000,
+                embed_path=embed_path, flow_path=flow_path, csv_output=csv_output)
+            print(flow_outputs['pred_omega'].shape)
+            omega_diffs, omega_z_scores = self.compute_z_scores(flow_outputs['pred_omega'], flow_outputs['pred_sigma_omega'], flow_outputs['truth_omega'])
+            beta_diffs, beta_z_scores   = self.compute_z_scores(flow_outputs['pred_beta'], flow_outputs['pred_sigma_beta'], flow_outputs['truth_beta'])
+            flow_z_scores_stacked = np.stack(
+                [omega_z_scores.numpy(), beta_z_scores.numpy()],
+                axis=1
+            )
+
+        if loss=='Quantile':
+            ssm_outputs['pred_sigma1'] = (ssm_outputs['pred_q75_1'] - ssm_outputs['pred_q25_1']) / 2.
+            ssm_outputs['pred_sigma2'] = (ssm_outputs['pred_q75_2'] - ssm_outputs['pred_q25_2']) / 2.
 
         # Get differences between predictions and truths
         param1_diff, param1_z_score = self.compute_z_scores(ssm_outputs['pred_param1'], ssm_outputs['pred_sigma1'], ssm_outputs['truth_param1'])
         param2_diff, param2_z_score = self.compute_z_scores(ssm_outputs['pred_param2'], ssm_outputs['pred_sigma2'], ssm_outputs['truth_param2'])
-        ssm_diffs = {
-            'param1_diff': param1_diff,
-            'param2_diff': param2_diff,
-        }
-        ssm_z_scores = {
-            'param1_z_score': param1_z_score,
-            'param2_z_score': param2_z_score,
-        }
+
+        print(param1_diff.shape)
+        print(omega_diffs.shape)
 
         # Stack into (N, 2) array
-        ssm_diffs_stacked = np.stack(
-            [ssm_diffs['param1_diff'].numpy(), ssm_diffs['param2_diff'].numpy()],
+        ssm_diffs_stacked, ssm_z_scores_stacked = np.stack(
+            [param1_diff.numpy(), param2_diff.numpy()],
+            axis=1
+        ), np.stack(
+            [param1_z_score.numpy(), param2_z_score.numpy()],
             axis=1
         )
-        ssm_z_scores_stacked = np.stack(
-            [ssm_z_scores['param1_z_score'].numpy(), ssm_z_scores['param2_z_score'].numpy()],
-            axis=1
-        )
+
         # Get loss per sample
         loss_per_sample = ssm_outputs['loss_per_sample'].numpy()
 
         # Get uncertainties
-        if loss == 'NLLGaussian':
-            uncertainties_stacked = np.sqrt(
-                np.stack(
-                    [ssm_outputs['pred_sigma1'].numpy(), ssm_outputs['pred_sigma2'].numpy()],
-                    axis=1
-                )
-            )
-        elif loss == 'Quantile':
-            uncertainties_stacked = np.stack(
-                [ssm_outputs['pred_q75_1'].numpy() - ssm_outputs['pred_q25_1'].numpy(),
-                 ssm_outputs['pred_q75_2'].numpy() - ssm_outputs['pred_q25_2'].numpy()],
-                axis=1
-            )
+        uncertainties_stacked = np.stack(
+            [ssm_outputs['pred_sigma1'].numpy(), ssm_outputs['pred_sigma2'].numpy()],
+            axis=1
+        )
 
         # Prepare labels for the plots
         if self.datatype == 'SHO':
@@ -641,17 +642,24 @@ class Plotter:
 
         # Plot z_scores
         figure_z_scores = corner.corner(
-            ssm_z_scores_stacked,
+            # ssm_z_scores_stacked,
+            np.clip(ssm_z_scores_stacked, -5, 5), #### TODO: temporary fix
             quantiles=[0.16, 0.5, 0.84],
             labels=labels_z_scores,
             show_titles=True,
             title_kwargs={"fontsize": 12},
             label_kwargs={"fontsize": 12},
             title_fmt='.2f',
-            color='C4'
+            color='purple'
         )
         figure_z_scores.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
         figure_z_scores.subplots_adjust(top=0.87)
+        if plot_flow:
+            corner.corner(
+                flow_z_scores_stacked,
+                fig=figure_z_scores,
+                color='gray'
+            )
 
         # Plot loss per sample
         # figure_loss = corner.corner(
@@ -707,7 +715,7 @@ class Plotter:
                 _df = _df.reset_index()
                 _df['event_id'] = _df['event_id'].ffill()
                 _df = _df.set_index('event_id')
-                dfs.append(_df)           
+                dfs.append(_df)
             combined_df = pd.concat(dfs, axis=0, ignore_index=False)
             print(f'Combined {len(bilby_parquet)} parquet files into a dataframe with shape {combined_df.shape}')
             combined_df.to_parquet(parquet_name)
@@ -718,27 +726,36 @@ class Plotter:
 
 if __name__ == "__main__":
     plotter = Plotter(datatype='SHO', datasfx='_sigma0.4_gaussian')
-    # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250717075146.pt',
+    # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250720075718.pt',
     #                         num_hidden_layers_h=2)
     # plotter.plot_flow(
-    #     embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250717075146.pt',
-    #     flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250717075146.250717103434.pt')
-    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250718150413.path',
+    #     embed_hidden_layers=3,
+    #     embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250722152036.pt',
+    #     flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250722152036.250723151905.pt')
+    plotter.plot_ssm_predictions(
+        model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.Quantile.250725074211.path',
         d_model=6, n_layers=4,
-        save_prefix='ssm_d6_n4', loss='NLLGaussian', csv_output=True)
+        save_prefix='ssm_d6_n4', loss='Quantile', csv_output=True,
+        plot_flow=True, embed_hidden_layers=3,
+        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250722152036.pt',
+        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250722152036.250723151905.pt')
+    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250721001207.path',
+    #     d_model=3, n_layers=10,
+    #     save_prefix='ssm_d3_n10_fast', loss='NLLGaussian', csv_output=True)
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SHO/models/model.SSM.SHO.Quantile.20250528-013120.path',
     #                              save_prefix='ssm', loss='Quantile')
     # plotter.plot_bilby()
 
     plotter = Plotter(datatype='SineGaussian', datasfx='_sigma0.4_gaussian')
-    # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250717075146.pt',
+    # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250720075718.pt',
     #                         num_hidden_layers_h=2)
     # plotter.plot_flow(
-    #     embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250717075146.pt',
-    #     flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250717075146.250717103434.pt')
-    plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250718151153.path',
-        d_model=6, n_layers=4,
-        save_prefix='ssm_d6_n4', loss='NLLGaussian', csv_output=True)
+    #     embed_hidden_layers=3,
+    #     embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250722152036.pt',
+    #     flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250722152036.250723151905.pt')
+    # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.Quantile.250724123053.path',
+    #     d_model=6, n_layers=4,
+    #     save_prefix='ssm_d6_n4', loss='Quantile', csv_output=True)
     # plotter.plot_ssm_predictions(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/SineGaussian/models/model.SSM.SineGaussian.Quantile.20250528-005641.path',
     #                              save_prefix='ssm', loss='Quantile')
     # plotter.plot_bilby()
