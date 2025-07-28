@@ -37,7 +37,6 @@ class VICRegLoss_modified(nn.Module):
         #return x.flatten(start_dim=1)[...,:-1].view(num_batch, n - 1, n + 1)[...,1:].flatten()
         return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
-
 class VICRegLoss(nn.Module):
     def forward(self, x, y, wt_repr=1.0, wt_cov=1.0, wt_std=1.0):
         repr_loss = F.mse_loss(x, y)
@@ -127,4 +126,72 @@ class MultiQuantileLoss(nn.Module):
             return loss.sum()
         else:
             return loss
+
+
+####### Compound loss functions #######
+
+class NLLGaussianUncertainties(nn.Module):
+    """NLLGaussian to predict the values and uncertainties of the parameters.
+
+    Args:
+        (None)
+
+    Forward Args:
+        preds (torch.Tensor): The predicted values.
+        targets (torch.Tensor): The truth values.
+        variances (torch.Tensor): The uncertainties squared. Must be positive.
+    
+    Raises:
+        ValueError: If the reduction method is not one of the valid options.
+
+    Example:
+        >>> loss_fn = NLLGaussianUncertainties()
+        >>> preds   = torch.tensor([0.5, 1.0, 1.5])
+        >>> targets = torch.tensor([1.0, -1.0, -0.5])
+        >>> variances = torch.tensor([0.2, 0.3, 0.15])
+        >>> loss    = loss_fn(preds, targets, variances)
+        >>> print(loss)  # Output will be the quantile loss value
+    """
+    def __init__(self):
+        super().__init__()
+        self.criterion = nn.GaussainNLLLoss(reduction='mean', full=False, eps=1e-9)
+
+    def forward(self, preds, targets, variances):
+        return self.criterion(preds, targets, variances)
+
+class QuantileUncertainties(nn.Module):
+    """Quantile to predict the values and uncertainties of the parameters.
+    1 sigma = (q84 - q16)/2
+
+    Args:
+        reduction (str): Reduction method.
+            Valid options are 'mean' (default), 'sum', or 'none'.
+
+    Forward Args:
+        preds_means (torch.Tensor): The predicted mean values.
+        preds_q16 (torch.Tensor): The predicted q16 values.
+        preds_q84 (torch.Tensor): The predicted q84 values.
+        targets (torch.Tensor): The truth values.
+    
+    Raises:
+        ValueError: If the reduction method is not one of the valid options.
+
+    Example:
+        >>> loss_fn = QuantileUncertainties()
+        >>> loss    = loss_fn(pred_means, pred_q16, pred_q84, targets)
+        >>> print(loss)  # Output will be the quantile loss value
+    """
+    def __init__(self, reduction='mean'):
+        super().__init__()
+        self.l_mean = nn.MSELoss(reduction='mean')
+        self.l_q16 = QuantileLoss(quantile=0.1587, reduction=reduction)
+        self.l_q84 = QuantileLoss(quantile=0.8413, reduction=reduction)
+
+    def forward(self, preds_mean, preds_q16, preds_q84, targets):
+        loss_fn = (
+            self.l_mean(preds_mean, targets),
+            self.l_q16(preds_q16, targets),
+            self.l_q84(preds_q84, targets)
+        ) / 3
+        return loss_fn
         
