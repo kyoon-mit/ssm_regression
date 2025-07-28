@@ -26,11 +26,13 @@ class NormalizingFlow():
             batch_size=1000,
             num_transforms=5,
             num_blocks=4,
-            hidden_features=30,
+            hidden_features=50,
+            embed_hidden_layers=2,
             context_features=3,  # needs to fit the pretraining embedding dimensionality
             num_points=200,  # length of time series
             num_repeats=10,  # number of augmentations
             device=None,
+            load_data=True,
         ):
         # Load datasets
         if datatype=='SineGaussian':
@@ -56,26 +58,28 @@ class NormalizingFlow():
         self.num_transforms = num_transforms
         self.num_blocks = num_blocks
         self.hidden_features = hidden_features
+        self.embed_hidden_layers = embed_hidden_layers
         self.context_features = context_features
         self.num_points = num_points
         self.num_repeats = num_repeats
 
-        self.train_dict = torch.load(os.path.join(self.datadir, f'train{datasfx}.pt'),
-                                     map_location=self.device, weights_only=True)
-        self.val_dict = torch.load(os.path.join(self.datadir, f'val{datasfx}.pt'),
-                                     map_location=self.device, weights_only=True)
-        self.train_data = DataGenerator(self.train_dict)
-        self.val_data = DataGenerator(self.val_dict)
-        self.TRAIN_BATCH_SIZE = batch_size
-        self.VAL_BATCH_SIZE = batch_size
-        self.train_data_loader = DataLoader(
-            self.train_data, batch_size=self.TRAIN_BATCH_SIZE,
-            shuffle=True
-        )
-        self.val_data_loader = DataLoader(
-            self.val_data, batch_size=self.VAL_BATCH_SIZE,
-            shuffle=True
-        )
+        if load_data:
+            self.train_dict = torch.load(os.path.join(self.datadir, f'train{datasfx}.pt'),
+                                        map_location=self.device, weights_only=True)
+            self.val_dict = torch.load(os.path.join(self.datadir, f'val{datasfx}.pt'),
+                                        map_location=self.device, weights_only=True)
+            self.train_data = DataGenerator(self.train_dict)
+            self.val_data = DataGenerator(self.val_dict)
+            self.TRAIN_BATCH_SIZE = batch_size
+            self.VAL_BATCH_SIZE = batch_size
+            self.train_data_loader = DataLoader(
+                self.train_data, batch_size=self.TRAIN_BATCH_SIZE,
+                shuffle=True
+            )
+            self.val_data_loader = DataLoader(
+                self.val_data, batch_size=self.VAL_BATCH_SIZE,
+                shuffle=True
+            )
         self.flow = nn.Module()
         self.optimizer = None
         self.scheduler = None
@@ -101,7 +105,7 @@ class NormalizingFlow():
             ]
             transforms += block
         transform = CompositeTransform(transforms)
-        embedding_net = EmbeddingNet(self.pretraining, device=self.device)
+        embedding_net = EmbeddingNet(self.pretraining, num_hidden_layers_h=self.embed_hidden_layers, device=self.device)
         self.flow = Flow(transform, base_dist, embedding_net).to(device=self.device)
         # print number of parameters
         print('Total number of NOT fixed weights in embedding net', sum(p.numel() for p in self.flow._embedding_net.parameters() if p.requires_grad))
@@ -115,7 +119,7 @@ class NormalizingFlow():
         last_loss = 0.
 
         for idx, val in enumerate(self.train_data_loader, 1):
-            _, augmented_theta, _, augmented_data, _, _, _, _, _, _ = val
+            _, augmented_theta, _, augmented_data, _ = val
             augmented_theta = augmented_theta[...,0:2]
 
             theta = augmented_theta.reshape(-1, 2)
@@ -141,7 +145,7 @@ class NormalizingFlow():
         last_loss = 0.
 
         for idx, val in enumerate(self.val_data_loader, 1):
-            _, augmented_theta, _, augmented_data, _, _, _, _, _, _ = val
+            _, augmented_theta, _, augmented_data, _ = val
             augmented_theta = augmented_theta[...,0:2]
 
             theta = augmented_theta.reshape(-1, 2)

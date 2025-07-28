@@ -6,13 +6,13 @@
 #SBATCH --nodelist=submit66
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=30G
+#SBATCH --mem=10G
 #SBATCH --time=24:00:00
 #SBATCH --array=0
 
 # List of your scripts
 SCRIPTS=(
-/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/bns_run_regression_d16_n10_o6.sh
+/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/bns_run_regression_d16_n10_o2.sh
 )
 
 bash ${SCRIPTS[$SLURM_ARRAY_TASK_ID]}

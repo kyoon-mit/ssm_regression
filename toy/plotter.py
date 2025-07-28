@@ -252,7 +252,8 @@ class Plotter:
         return
     
     def flow_compute_vals(self, embed_path, flow_path,
-                          embed_hidden_layers=2, save_prefix='flow',
+                          embed_hidden_layers=2, flow_hidden_features=50,
+                          save_prefix='flow',
                           batch_size=256, num_samples=1000, csv_output=False):
         compute_on_cpu = True if self.device==torch.device('cpu') else False
         timestamp = extract_timestamp(flow_path, sep='_')
@@ -274,7 +275,7 @@ class Plotter:
         from parameter_estimation import NormalizingFlow
         nf = NormalizingFlow(datatype=self.datatype, embed_model=embed_path,
                              embed_hidden_layers=embed_hidden_layers,
-                             hidden_features=30,
+                             hidden_features=flow_hidden_features,
                              device=self.device, load_data=False)
         nf.build_flow()
         flow = nf.flow
@@ -335,24 +336,23 @@ class Plotter:
 
         return flow_outputs
 
-    def plot_flow(self, embed_path='', embed_hidden_layers=2, flow_path='', save_prefix='flow', csv_output=False):
+    def plot_flow(self, embed_path='', embed_hidden_layers=2,
+                  flow_path='', flow_hidden_features=50,
+                  save_prefix='flow', csv_output=False):
         flow_outputs = self.flow_compute_vals(embed_hidden_layers=embed_hidden_layers,
+                                              flow_hidden_features=flow_hidden_features,
                                               embed_path=embed_path, flow_path=flow_path,
                                               save_prefix=save_prefix, csv_output=csv_output)
         timestamp = extract_timestamp(flow_path, sep='_')
         omega_diffs, omega_z_scores = self.compute_z_scores(flow_outputs['pred_omega'], flow_outputs['pred_sigma_omega'], flow_outputs['truth_omega'])
         beta_diffs, beta_z_scores = self.compute_z_scores(flow_outputs['pred_beta'], flow_outputs['pred_sigma_beta'], flow_outputs['truth_beta'])
         # Stack into (N, 2) array
-        diffs_stacked = np.stack(
-            [omega_diffs.numpy(), beta_diffs.numpy()],
-            axis=1
-        )
-        z_scores_stacked = np.stack(
-            [omega_z_scores.numpy(), beta_z_scores.numpy()],
-            axis=1
-        )
+        diffs_stacked = np.stack([omega_diffs.numpy(), beta_diffs.numpy()], axis=1)
+        z_scores_stacked = np.stack([omega_z_scores.numpy(), beta_z_scores.numpy()], axis=1)
+        uncertainties_stacked = np.stack([flow_outputs['pred_sigma_omega'].numpy(), flow_outputs['pred_sigma_beta'].numpy()], axis=1)
         labels_diffs = [r'$\hat{\omega}_0 - \omega_0$', r'$\hat{\beta} - \beta$']
         labels_z_scores = [r'$(\hat{\omega}_0 - \omega_0)$/$\hat{\sigma}_{\omega_0}$', r'$(\hat{\beta} - \beta)$/$\hat{\sigma}_\beta$']
+        labels_uncertainties = [r'$\hat{\sigma}_{\omega_0}$', r'$\hat{\sigma}_\beta$']
         figure_diffs = corner.corner(
             diffs_stacked,
             quantiles=[0.16, 0.5, 0.84],
@@ -373,6 +373,18 @@ class Plotter:
             title_fmt='.2f',
             color='C5'
         )
+        figure_uncertainties = corner.corner(
+            uncertainties_stacked,
+            labels=labels_uncertainties,
+            quantiles=[0.16, 0.5, 0.84],
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='C3'
+        )
+        figure_uncertainties.suptitle(f'Data: {self.datatype} (NF)', fontsize=12)
+        figure_uncertainties.subplots_adjust(top=0.87)
         figure_diffs.suptitle(f'Data: {self.datatype} (NF)', fontsize=12)
         figure_diffs.subplots_adjust(top=0.87)
         figure_z_scores.suptitle(f'Data: {self.datatype} (NF)', fontsize=12)
@@ -382,11 +394,15 @@ class Plotter:
         if self.save_path is not None:
             self.__savefig__(figure_diffs, f'{save_prefix}_{self.datatype}{timestamp}_diffs.png')
             self.__savefig__(figure_z_scores, f'{save_prefix}_{self.datatype}{timestamp}_z_scores.png')
+            self.__savefig__(figure_uncertainties, f'{save_prefix}_{self.datatype}{timestamp}_uncertainties.png')
         else:
             figure_diffs.tight_layout()
             figure_diffs.show()
             figure_z_scores.tight_layout()
             figure_z_scores.show()
+            figure_uncertainties.tight_layout()
+            figure_uncertainties.show()
+        plt.close()
 
     def compute_z_scores(self, pred_means, pred_stds, truth_means):
         diffs = pred_means - truth_means
@@ -544,8 +560,10 @@ class Plotter:
         return return_dict
 
     def plot_ssm_predictions(self, d_model, n_layers,
-            model_path='', save_prefix='ssm', loss='NLLGaussian', csv_output=False,
-            plot_flow=False, embed_hidden_layers=2, embed_path='', flow_path=''):
+            model_path='', save_prefix='ssm', loss='NLLGaussian',
+            csv_output=False, plot_flow=False,
+            embed_path='', embed_hidden_layers=2,
+            flow_path='', flow_hidden_features=50):
         timestamp = extract_timestamp(model_path, sep='_')
         from models import S4Model
         if loss=='NLLGaussian': d_output = 4
@@ -566,8 +584,10 @@ class Plotter:
         
         if plot_flow:
             flow_outputs = self.flow_compute_vals(
-                embed_hidden_layers=embed_hidden_layers, batch_size=1000,
-                embed_path=embed_path, flow_path=flow_path, csv_output=csv_output)
+                batch_size=1000,
+                embed_path=embed_path, embed_hidden_layers=embed_hidden_layers,
+                flow_path=flow_path, flow_hidden_features=flow_hidden_features,
+                csv_output=csv_output)
             omega_diffs, omega_z_scores = self.compute_z_scores(flow_outputs['pred_omega'], flow_outputs['pred_sigma_omega'], flow_outputs['truth_omega'])
             beta_diffs, beta_z_scores   = self.compute_z_scores(flow_outputs['pred_beta'], flow_outputs['pred_sigma_beta'], flow_outputs['truth_beta'])
             flow_z_scores_stacked = np.stack(
@@ -584,22 +604,13 @@ class Plotter:
         param2_diff, param2_z_score = self.compute_z_scores(ssm_outputs['pred_param2'], ssm_outputs['pred_sigma2'], ssm_outputs['truth_param2'])
 
         # Stack into (N, 2) array
-        ssm_diffs_stacked, ssm_z_scores_stacked = np.stack(
-            [param1_diff.numpy(), param2_diff.numpy()],
-            axis=1
-        ), np.stack(
-            [param1_z_score.numpy(), param2_z_score.numpy()],
-            axis=1
-        )
+        ssm_diffs_stacked, ssm_z_scores_stacked, uncertainties_stacked =\
+            np.stack([param1_diff.numpy(), param2_diff.numpy()], axis=1),\
+            np.stack([param1_z_score.numpy(), param2_z_score.numpy()],axis=1),\
+            np.stack([ssm_outputs['pred_sigma1'].numpy(), ssm_outputs['pred_sigma2'].numpy()],axis=1)
 
         # Get loss per sample
         loss_per_sample = ssm_outputs['loss_per_sample'].numpy()
-
-        # Get uncertainties
-        uncertainties_stacked = np.stack(
-            [ssm_outputs['pred_sigma1'].numpy(), ssm_outputs['pred_sigma2'].numpy()],
-            axis=1
-        )
 
         # Prepare labels for the plots
         if self.datatype == 'SHO':
@@ -660,24 +671,24 @@ class Plotter:
         figure_z_scores.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
         figure_z_scores.subplots_adjust(top=0.87)
 
-        # Plot loss per sample
-        # figure_loss = corner.corner(
-        #     loss_per_sample,
-        #     quantiles=[0.16, 0.5, 0.84],
-        #     labels=[f'{loss} loss per sample'],
-        #     show_titles=True,
-        #     title_kwargs={"fontsize": 12},
-        #     label_kwargs={"fontsize": 12},
-        #     title_fmt='.2f',
-        #     color='C7'
-        # )
-        # figure_loss.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        # Plot loss per sample as a histogram using matplotlib
+        figure_loss, ax_loss = plt.subplots(figsize=(6, 4))
+        _, _, _ = ax_loss.hist(
+            loss_per_sample,
+            alpha=0.5,
+            label=f'{loss} loss per sample',
+            bins=40,
+            histtype='step',
+            color='black',
+        )
+        figure_loss.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
 
         # Save the figures
         if self.save_path is not None:
             self.__savefig__(figure_diffs, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_diffs.png')
             self.__savefig__(figure_uncertainties, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_uncertainties.png')
             self.__savefig__(figure_z_scores, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_z_scores.png')
+            self.__savefig__(figure_loss, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_hist_loss_per_sample.png')
         else:
             figure_diffs.tight_layout()
             figure_diffs.show()
@@ -685,6 +696,10 @@ class Plotter:
             figure_uncertainties.show()
             figure_z_scores.tight_layout()
             figure_z_scores.show()
+            figure_loss.tight_layout()
+            figure_loss.show()
+        
+        plt.close()
 
         print(f'Saved SSM predictions plots to {self.save_path}')
         print(f'SSM predictions computed with loss={loss}')
@@ -724,46 +739,44 @@ class Plotter:
             print(f'Loaded combined dataframe from {parquet_name} with shape {combined_df.shape}')
 
 if __name__ == "__main__":
+    embed_sho = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250720075718.pt'
+    flow_sho = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250720075718.250726123119.pt'
+    embed_sg = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250720075718.pt'
+    flow_sg = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250720075718.250726124120.pt'
     plotter = Plotter(datatype='SHO', datasfx='_sigma0.4_gaussian')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250720075718.pt',
     #                         num_hidden_layers_h=2)
-    # plotter.plot_flow(
-    #     embed_hidden_layers=3,
-    #     embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250722152036.pt',
-    #     flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250722152036.250723151905.pt')
+    plotter.plot_flow(embed_hidden_layers=2, embed_path=embed_sho, flow_path=flow_sho)
     plotter.plot_ssm_predictions(
         model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.Quantile.250725074211.path',
         d_model=6, n_layers=4,
         save_prefix='ssm_d6_n4', loss='Quantile', csv_output=True,
-        plot_flow=True, embed_hidden_layers=3,
-        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250722152036.pt',
-        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250722152036.250723151905.pt')
+        plot_flow=True, embed_hidden_layers=2, flow_hidden_features=50,
+        embed_path=embed_sho,
+        flow_path=flow_sho)
     plotter.plot_ssm_predictions(
         model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250721083326.path',
         d_model=6, n_layers=4,
         save_prefix='ssm_d6_n4', loss='NLLGaussian', csv_output=True,
-        plot_flow=True, embed_hidden_layers=3,
-        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250722152036.pt',
-        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250722152036.250723151905.pt')
+        plot_flow=True, embed_hidden_layers=2, flow_hidden_features=50,
+        embed_path=embed_sho,
+        flow_path=flow_sho)
     
     plotter = Plotter(datatype='SineGaussian', datasfx='_sigma0.4_gaussian')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250720075718.pt',
     #                         num_hidden_layers_h=2)
-    # plotter.plot_flow(
-    #     embed_hidden_layers=3,
-    #     embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250722152036.pt',
-    #     flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250722152036.250723151905.pt')
+    plotter.plot_flow(embed_hidden_layers=2, embed_path=embed_sg, flow_path=flow_sg)
     plotter.plot_ssm_predictions(
         model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.Quantile.250725074703.path',
         d_model=6, n_layers=4,
         save_prefix='ssm_d6_n4', loss='Quantile', csv_output=True,
-        plot_flow=True, embed_hidden_layers=3,
-        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250722152036.pt',
-        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250722152036.250723151905.pt')
+        plot_flow=True, embed_hidden_layers=2, flow_hidden_features=50,
+        embed_path=embed_sg,
+        flow_path=flow_sg)
     plotter.plot_ssm_predictions(
-        model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250721085653.path',
+        model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250721083326.path',
         d_model=6, n_layers=4,
         save_prefix='ssm_d6_n4', loss='NLLGaussian', csv_output=True,
-        plot_flow=True, embed_hidden_layers=3,
-        embed_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250722152036.pt',
-        flow_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250722152036.250723151905.pt')
+        plot_flow=True, embed_hidden_layers=2, flow_hidden_features=50,
+        embed_path=embed_sg,
+        flow_path=flow_sg)

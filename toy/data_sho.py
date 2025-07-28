@@ -13,17 +13,17 @@ random.seed(SEED)
 # path = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
 savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO'
 global sfx
-sfx = '_sigma0.4_gaussian'
-# sfx = '_sigma0.4_poisson'
+sfx = '_sigma0.4_gaussian1'
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 priors = dict()
-priors['omega_0'] = scipy.stats.uniform(loc=0.1, scale=1.9)
+priors['omega_0'] = scipy.stats.uniform(loc=0.1, scale=2.0)
 priors['beta'] = scipy.stats.uniform(loc=0, scale=0.5)
-priors['shift'] = scipy.stats.uniform(loc=-4, scale=8)
+priors['shift'] = scipy.stats.uniform(loc=-4, scale=4)
 
+global num_simulations, num_repeats, num_points, sigma
 num_simulations = 100000 # number of time series to be generated
 num_repeats = 10 # number of augmentations
 num_points = 200 # length of time series
@@ -67,6 +67,21 @@ def get_sho_data(omega_0=None, beta=None, shift=None, num_points=1):
 
     return t_vals, y, y_clean, y_noise, omega_0, beta, shift
 
+def get_sho_data_np(omega_0=None, beta=None, shift=None, num_points=1):
+    """Sample omega, beta, shift and return a batch of data with noise (numpy version)"""
+    omega_0 = priors['omega_0'].rvs() if omega_0 is None else omega_0
+    beta = priors['beta'].rvs() if beta is None else beta
+    shift = priors['shift'].rvs() if shift is None else shift
+
+    t_vals = np.linspace(-1, 10, num_points).astype(np.float32)
+
+    y_clean = damped_sho_np(t_vals, omega_0=omega_0, beta=beta, shift=shift)
+    y_noise = sigma * np.random.randn(*y_clean.shape).astype(np.float32)
+    y = y_clean + y_noise
+    # y += np.random.poisson(lam=np.abs(y)).astype(np.float32)
+
+    return t_vals, y, y_clean, y_noise, omega_0, beta, shift
+
 # add augmentation
 def generate_dataset():
     theta_unshifted_vals = []
@@ -88,8 +103,8 @@ def generate_dataset():
         theta_unshifted = torch.tensor([omega_u, beta_u, shift_u]).repeat(num_repeats, 1).to(device=device)
         theta_unshifted_vals.append(theta_unshifted)
         data_unshifted_vals.append(y_unshifted.repeat(num_repeats, 1).to(device=device))
-        data_clean_unshifted_vals.append(y_clean_u.repeat(num_repeats, 1).to(device=device))
-        data_noise_unshifted_vals.append(y_noise_u.repeat(num_repeats, 1).to(device=device))
+        # data_clean_unshifted_vals.append(y_clean_u.repeat(num_repeats, 1).to(device=device))
+        # data_noise_unshifted_vals.append(y_noise_u.repeat(num_repeats, 1).to(device=device))
         # generate shifted data
         theta_shifted = []
         data_shifted = []
@@ -104,10 +119,10 @@ def generate_dataset():
             data_shifted.append(y_shifted)
         theta_shifted_vals.append(torch.stack(theta_shifted).to(device=device))
         data_shifted_vals.append(torch.stack(data_shifted).to(device=device))
-        data_clean_shifted_vals.append(y_clean_s.repeat(num_repeats, 1).to(device=device))
-        data_noise_shifted_vals.append(y_noise_s.repeat(num_repeats, 1).to(device=device))
+        # data_clean_shifted_vals.append(y_clean_s.repeat(num_repeats, 1).to(device=device))
+        # data_noise_shifted_vals.append(y_noise_s.repeat(num_repeats, 1).to(device=device))
         event_id.append(ii)
-        t_vals_array.append(t_vals)
+        # t_vals_array.append(t_vals)
 
     # Return dictionary of tensors
     return_dict = {
@@ -115,11 +130,11 @@ def generate_dataset():
         'theta_s': torch.stack(theta_shifted_vals),
         'data_u':  torch.stack(data_unshifted_vals),
         'data_s':  torch.stack(data_shifted_vals),
-        'data_clean_u': torch.stack(data_clean_unshifted_vals),
-        'data_noise_u': torch.stack(data_noise_unshifted_vals),
-        'data_clean_s': torch.stack(data_clean_shifted_vals),
-        'data_noise_s': torch.stack(data_noise_shifted_vals),
-        't_vals': torch.stack(t_vals_array),
+        # 'data_clean_u': torch.stack(data_clean_unshifted_vals),
+        # 'data_noise_u': torch.stack(data_noise_unshifted_vals),
+        # 'data_clean_s': torch.stack(data_clean_shifted_vals),
+        # 'data_noise_s': torch.stack(data_noise_shifted_vals),
+        # 't_vals': torch.stack(t_vals_array),
         'event_id': torch.tensor(event_id, dtype=torch.int32),
     }
 
@@ -131,11 +146,11 @@ class DataGenerator(Dataset):
         self.theta_shifted_vals   = data['theta_s']
         self.data_unshifted_vals  = data['data_u']
         self.data_shifted_vals    = data['data_s']
-        self.data_clean_unshifted_vals = data['data_clean_u']
-        self.data_noise_unshifted_vals = data['data_noise_u']
-        self.data_clean_shifted_vals = data['data_clean_s']
-        self.data_noise_shifted_vals = data['data_noise_s']
-        self.t_vals = data['t_vals']
+        # self.data_clean_unshifted_vals = data['data_clean_u']
+        # self.data_noise_unshifted_vals = data['data_noise_u']
+        # self.data_clean_shifted_vals = data['data_clean_s']
+        # self.data_noise_shifted_vals = data['data_noise_s']
+        # self.t_vals = data['t_vals']
         self.event_id = data['event_id']
 
     def __len__(self):
@@ -150,17 +165,17 @@ class DataGenerator(Dataset):
             self.theta_shifted_vals[idx].to(dtype=torch.float32),
             self.data_unshifted_vals[idx].to(dtype=torch.float32),
             self.data_shifted_vals[idx].to(dtype=torch.float32),
-            self.data_clean_unshifted_vals[idx].to(dtype=torch.float32),
-            self.data_noise_unshifted_vals[idx].to(dtype=torch.float32),
-            self.data_clean_shifted_vals[idx].to(dtype=torch.float32),
-            self.data_noise_shifted_vals[idx].to(dtype=torch.float32),
-            self.t_vals[idx].to(dtype=torch.float32),
+            # self.data_clean_unshifted_vals[idx].to(dtype=torch.float32),
+            # self.data_noise_unshifted_vals[idx].to(dtype=torch.float32),
+            # self.data_clean_shifted_vals[idx].to(dtype=torch.float32),
+            # self.data_noise_shifted_vals[idx].to(dtype=torch.float32),
+            # self.t_vals[idx].to(dtype=torch.float32),
             self.event_id[idx].to(dtype=torch.int32),
         )
 
 def save_raw_tensors(theta_u, theta_s, data_u, data_s,
-                     data_clean_u, data_noise_u, data_clean_s, data_noise_s,
-                     t_vals, event_id):
+                    #  data_clean_u, data_noise_u, data_clean_s, data_noise_s, t_vals,
+                     event_id):
     # Split indices
     num_total  = theta_u.shape[0]
     train_size = int(0.8 * num_total)
@@ -178,13 +193,15 @@ def save_raw_tensors(theta_u, theta_s, data_u, data_s,
             'theta_s': theta_s[idx],
             'data_u':  data_u[idx],
             'data_s':  data_s[idx],
-            'data_clean_u': data_clean_u[idx],
-            'data_noise_u': data_noise_u[idx],
-            'data_clean_s': data_clean_s[idx],
-            'data_noise_s': data_noise_s[idx],
-            't_vals':  t_vals[idx],
+            # 'data_clean_u': data_clean_u[idx],
+            # 'data_noise_u': data_noise_u[idx],
+            # 'data_clean_s': data_clean_s[idx],
+            # 'data_noise_s': data_noise_s[idx],
+            # 't_vals':  t_vals[idx],
             'event_id': event_id[idx],
-        }, os.path.join(savepath, f'{name}.pt'))
+        },
+        os.path.join(savepath, f'{name}.pt'),
+        _use_new_zipfile_serialization=True)
 
     save_split(f'train{sfx}', train_idx)
     save_split(f'val{sfx}', val_idx)

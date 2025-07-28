@@ -4,6 +4,9 @@
 *.hdf5
 *.npz
 
+# Bash scripts
+*.sh
+
 # Python builds
 __pycache__/
 *.pyc

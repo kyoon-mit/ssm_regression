@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=bilby_batch
-#SBATCH --output=logs/bilby_%A_%a.out
-#SBATCH --error=logs/bilby_%A_%a.err
+#SBATCH --output=/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/logs/bilby_%A_%a.out
+#SBATCH --error=/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/logs/bilby_%A_%a.err
 #SBATCH --array=0-19
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4

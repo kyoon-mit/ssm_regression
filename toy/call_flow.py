@@ -18,6 +18,11 @@ def parse_args():
                         help='Data type or dataset.')
     parser.add_argument('--embed_model', type=str,
                         help='Full path to the embedding model.')
+    parser.add_argument('-l', '--embed_hidden_layers', type=int,
+                        help='Number of hidden layers in the embedding model.')    
+    parser.add_argument('--hidden_features', type=int,
+                        default=50,
+                        help='Number of hidden features in the flow.')
     parser.add_argument('-s', '--suffix', type=str,
                         default='',
                         help='Suffix for the dataset, e.g., "_sigma0.4_gaussian".')
@@ -61,6 +66,8 @@ def main():
     wandb.init(project=f'flow_{datatag}', name=f'flow_{datatag}_{timestamp}')
 
     task = NormalizingFlow(embed_model=args.embed_model, datatype=datatype, datasfx=args.suffix,
+                           embed_hidden_layers=args.embed_hidden_layers,
+                           hidden_features=args.hidden_features,
                            device=args.device, batch_size=args.batch_size)
     task.build_flow()
     flow = task.flow

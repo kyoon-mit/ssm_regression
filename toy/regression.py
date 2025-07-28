@@ -7,6 +7,11 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import numpy as np
+
+import sys
+from pathlib import Path
+sys.path.append(os.path.join(Path(__file__).resolve().parent.parent, 'modules'))
+
 from models import S4Model
 from losses import QuantileLoss
 
@@ -24,7 +29,8 @@ class SSMRegression():
         device=None,
         datatype='SHO', # 'SineGaussian', 'SHO', or 'LIGO'
         datasfx='', # suffix for the dataset, e.g., '_sigma0.4_gaussian'
-        loss='NLLGaussian', # 'NLLGaussian', 'Quantile'
+        loss='NLLGaussian', # 'NLLGaussian', 'Quantile', 'MultiQuantile'
+        load_data=True
     ):
         # Load datasets
         if datatype=='SineGaussian':
@@ -52,31 +58,32 @@ class SSMRegression():
         self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
         self.modeldir = os.path.join(self.datadir, 'output')
 
-        self.train_dict = torch.load(os.path.join(self.datadir, f'train{datasfx}.pt'), map_location=self.device, weights_only=True)
-        self.val_dict = torch.load(os.path.join(self.datadir, f'val{datasfx}.pt'), map_location=self.device, weights_only=True)
+        if load_data:
+            self.train_dict = torch.load(os.path.join(self.datadir, f'train{datasfx}.pt'), map_location=self.device, weights_only=True)
+            self.val_dict = torch.load(os.path.join(self.datadir, f'val{datasfx}.pt'), map_location=self.device, weights_only=True)
 
-        self.train_data = DataGenerator(self.train_dict)
-        self.val_data = DataGenerator(self.val_dict)
+            self.train_data = DataGenerator(self.train_dict)
+            self.val_data = DataGenerator(self.val_dict)
 
-        self.TRAIN_BATCH_SIZE = 1000
-        self.VAL_BATCH_SIZE = 1000
+            self.TRAIN_BATCH_SIZE = 1000
+            self.VAL_BATCH_SIZE = 1000
 
-        self.train_data_loader = DataLoader(
-            self.train_data, batch_size=self.TRAIN_BATCH_SIZE,
-            shuffle=True
-        )
-        self.val_data_loader = DataLoader(
-            self.val_data, batch_size=self.VAL_BATCH_SIZE,
-            shuffle=True
-        )
+            self.train_data_loader = DataLoader(
+                self.train_data, batch_size=self.TRAIN_BATCH_SIZE,
+                shuffle=True
+            )
+            self.val_data_loader = DataLoader(
+                self.val_data, batch_size=self.VAL_BATCH_SIZE,
+                shuffle=True
+            )
 
         self.model = None
         self.optimizer, self.scheduler = None, None
 
     def reshaping(self, batch, input_dim=1, output_dim=2):
         theta_u, theta_s, data_u, data_s, \
-        data_clean_u, data_noise_u, data_clean_s, data_noise_s, \
-        t_vals, event_id = batch
+        event_id = batch
+        # data_clean_u, data_noise_u, data_clean_s, data_noise_s, t_vals \
 
         # remove repeat (take only first repeat for unshifted data)
         if input_dim==1:
@@ -151,8 +158,18 @@ class SSMRegression():
         elif self.loss=='Quantile':
             return {
                 'mean': outputs[:,:2], # mean predictions on the two parameters
-                'q25':  outputs[:,2:4],
-                'q75':  outputs[:,4:6],
+                'q16':  outputs[:,2:4],
+                'q84':  outputs[:,4:6],
+            }
+        elif self.loss=='MultiQuantile':
+            return {
+                'q05': outputs[:,:2],
+                'q25': outputs[:,2:4],
+                'q40': outputs[:,4:6],
+                'q50': outputs[:,6:8],
+                'q60': outputs[:,8:10],
+                'q75': outputs[:,10:12],
+                'q95': outputs[:,12:14]
             }
         else:
             msg = f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'."
@@ -170,13 +187,30 @@ class SSMRegression():
             loss_fn = criterion(outputs['mean'], targets, outputs['sigma'])
         elif self.loss == 'Quantile':
             mean_loss = nn.MSELoss(reduction='mean')
-            q25_loss = QuantileLoss(quantile=0.25)
-            q75_loss = QuantileLoss(quantile=0.75)
+            q16_loss = QuantileLoss(quantile=0.1587)
+            q84_loss = QuantileLoss(quantile=0.8413)
             loss_fn = (
                 mean_loss(outputs['mean'], targets) +
-                q25_loss(outputs['q25'], targets) +
-                q75_loss(outputs['q75'], targets)
+                q16_loss(outputs['q16'], targets) +
+                q84_loss(outputs['q84'], targets)
             )
+        elif self.loss == 'MultiQuantile':
+            q05_loss = QuantileLoss(quantile=0.05)
+            q25_loss = QuantileLoss(quantile=0.25)
+            q40_loss = QuantileLoss(quantile=0.40)
+            q50_loss = QuantileLoss(quantile=0.50)
+            q60_loss = QuantileLoss(quantile=0.60)
+            q75_loss = QuantileLoss(quantile=0.75)
+            q95_loss = QuantileLoss(quantile=0.95)
+            loss_fn = (
+                q05_loss(outputs['q05'], targets) +
+                q25_loss(outputs['q25'], targets) +
+                q40_loss(outputs['q40'], targets) +
+                q50_loss(outputs['q50'], targets) +
+                q60_loss(outputs['q60'], targets) +
+                q75_loss(outputs['q75'], targets) +
+                q95_loss(outputs['q95'], targets)
+            ) / 7
         else:
             msg = f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'."
             logger.error(msg)

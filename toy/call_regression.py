@@ -18,7 +18,7 @@ def parse_args():
                         choices=['SHO', 'SineGaussian', 'LIGO'],
                         help='Data type or dataset.')
     parser.add_argument('-l', '--loss', type=str,
-                        choices=['NLLGaussian', 'Quantile'],
+                        choices=['NLLGaussian', 'Quantile', 'MultiQuantile'],
                         help='Type of loss function to use.')
     parser.add_argument('-d', '--device', type=str,
                         default='cuda',
@@ -38,11 +38,14 @@ def parse_args():
     parser.add_argument('--n_layers', type=int,
                         default=4,
                         help='Number of layers in the model.')
+    parser.add_argument('--d_output', type=int,
+                        default=4,
+                        help='Number of output nodes.')
     parser.add_argument('--dropout', type=float,
                         default=0.0,
                         help='Dropout rate.')
     parser.add_argument('--lr', type=float,
-                        default=0.001,
+                        default=0.01,
                         help='Learning rate for the optimizer.')
     parser.add_argument('--weight_decay', type=float,
                         default=0.01,
@@ -59,7 +62,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-    configure_logging(logname='ssm_regression', logfile=args.logfile, loglevel=args.loglevel)
+    timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+    configure_logging(logname='ssm_regression', logfile=args.logfile, loglevel=args.loglevel, timestamp=timestamp)
     
     datatype = args.datatype
     datatag = 'toy'  # default tag for toy datasets
@@ -76,6 +80,7 @@ def main():
     # Initialize the regression model
     task = SSMRegression(
         d_model=args.d_model,
+        d_output=args.d_output,
         n_layers=args.n_layers,
         dropout=args.dropout,
         prenorm=False,
@@ -86,8 +91,7 @@ def main():
     )
     task.build_model()
     task.setup_optimizer(lr=args.lr, weight_decay=args.weight_decay)
-
-    timestamp = datetime.now().strftime('%y%m%d%H%M%S')
+    
     wandb.init(project=f'ssm_{datatag}_regression', name=f'ssm_{datatag}_{timestamp}')
     EPOCHS = args.epochs
 

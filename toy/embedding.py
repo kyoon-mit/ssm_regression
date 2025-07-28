@@ -13,7 +13,7 @@ class Embedding():
         batch_size=1000, # batch size for training and validation
         num_hidden_layers_h=2, # number of hidden layers in the embedding model
         device=None,
-        datatype='SHO', # options: 'SineGaussian', 'SHO', 'LIGO'
+        datatype='SHO', # options: 'SineGaussian', 'SHO'
         datasfx='', # suffix for the dataset, e.g., '_sigma0.4_gaussian'
     ):
 
@@ -22,8 +22,6 @@ class Embedding():
             from data_sinegaussian import DataGenerator
         elif datatype=='SHO':
             from data_sho import DataGenerator
-        elif datatype=='LIGO':
-            pass # TODO: implement LIGO data loading
 
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -69,11 +67,11 @@ class Embedding():
         self.model = SimilarityEmbedding(num_hidden_layers_h=self.num_hidden_layers_h).to(self.device)
         # setup scheduler
         self.optimizer = optim.Adam(self.model.parameters(), lr=5e-3)
-        scheduler_1 = optim.lr_scheduler.ConstantLR(self.optimizer, total_iters=20)
-        scheduler_2 = optim.lr_scheduler.OneCycleLR(self.optimizer, total_steps=20, max_lr=5e-4)
+        scheduler_1 = optim.lr_scheduler.ConstantLR(self.optimizer, total_iters=2)
+        scheduler_2 = optim.lr_scheduler.OneCycleLR(self.optimizer, total_steps=200, max_lr=5e-4)
         scheduler_3 = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
         self.scheduler = optim.lr_scheduler.SequentialLR(
-        self.optimizer, schedulers=[scheduler_1, scheduler_2, scheduler_3], milestones=[20, 40])
+        self.optimizer, schedulers=[scheduler_1, scheduler_2, scheduler_3], milestones=[50, 150])
         logger.info('...done!')
 
         # print number of trainable parameters
@@ -90,7 +88,7 @@ class Embedding():
 
         #for idx, val in enumerate(tqdm(train_data_loader, desc='train', leave=False), 1):
         for idx, val in enumerate(self.train_data_loader):
-            _, _, unshifted_data, augmented_data, _, _, _, _, _, _ = val
+            _, _, unshifted_data, augmented_data, _ = val
             embedded_values_aug, _ = self.model(augmented_data)
             embedded_values_orig, _ = self.model(unshifted_data)
             sim_loss = 0
@@ -120,7 +118,7 @@ class Embedding():
 
         #for idx, val in enumerate(tqdm(val_data_loader, desc='val', leave=False), 1):
         for idx, val in enumerate(self.val_data_loader):
-            _, _, unshifted_data, augmented_data, _, _, _, _, _, _ = val
+            _, _, unshifted_data, augmented_data, _ = val
             embedded_values_aug, _ = self.model(augmented_data)
             embedded_values_orig, _ = self.model(unshifted_data)
             sim_loss = 0
