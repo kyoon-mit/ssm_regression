@@ -59,98 +59,68 @@ class LitBNSDataModule(L.LightningDataModule):
         split_indices_file='', random_seed=42
     ):
     super().__init__()
-    dataset = BNSDataset(hdf5_path, downsample_factor=downsample_factor,
-        normalize=normalize, duration=duration, scale_factor=scale_factor)
-    if split_indices_file:
-        if not split_indices_file.endswith('.npz'):
-            raise ValueError("split_indices_file must be a .npz file containing precomputed indices.")
-        # Check if the file exists
-        if not os.path.exists(split_indices_file):
-            raise FileNotFoundError(f"The file {split_indices_file} does not exist.")
-        # Load precomputed indices
-        self.indices = np.load(split_indices_file)
-    else:
-        # Get indices
-        num_samples = len(dataset)
-        indices = np.arange(num_samples)
-        np.random.seed(random_seed)
-        np.random.shuffle(indices)
-        
-        # Split indices
-        train_idx = int(train_split * num_samples)
-        val_idx = int((1-test_split) * num_samples)
+    self.hdf5_path = hdf5_path
+    self.downsample_factor = downsample_factor
+    self.duration = duration
+    self.scale_factor = scale_factor
+    self.normalize = normalize
+    self.train_batch_size = train_batch_size
+    self.val_batch_size = val_batch_size
+    self.test_batch_size = test_batch_size
+    self.train_split = train_split
+    self.test_split = test_split
+    self.split_indices_file = split_indices_file
+    self.random_seed = random_seed
 
-        self.indices = {
-            'train_indices': indices[:train_idx],
-            'val_indices': indices[train_idx:val_idx],
-            'test_indices': indices[val_idx:]
-        }
+    def prepare_data(self):
+        self.dataset = BNSDataset(self.hdf5_path, downsample_factor=self.downsample_factor,
+        normalize=self.normalize, duration=self.duration, scale_factor=self.scale_factor)
+        if self.split_indices_file:
+            if not self.split_indices_file.endswith('.npz'):
+                raise ValueError("split_indices_file must be a .npz file containing precomputed indices.")
+            # Check if the file exists
+            if not os.path.exists(self.split_indices_file):
+                raise FileNotFoundError(f"The file {self.split_indices_file} does not exist.")
+            # Load precomputed indices
+            self.indices = np.load(self.split_indices_file)
+        else:
+            # Get indices
+            num_samples = len(dataset)
+            indices = np.arange(num_samples)
+            np.random.seed(random_seed)
+            np.random.shuffle(indices)
+            
+            # Split indices
+            train_idx = int(train_split * num_samples)
+            val_idx = int((1-test_split) * num_samples)
 
-def get_dataloaders(hdf5_path,
-                    downsample_factor=1, duration=64, scale_factor=1., normalize=False,
-                    train_batch_size=1000, val_batch_size=1000, test_batch_size=1000,
-                    train_split=0.8, test_split=0.1,
-                    split_indices_file='', random_seed=42):
-    import os
-    import numpy as np
-    from torch.utils.data import DataLoader, Subset
-    dataset = DataGenerator(hdf5_path, downsample_factor=downsample_factor,
-                            hnormalize=normalize, duration=duration, scale_factor=scale_factor)
-    if split_indices_file:
-        if not split_indices_file.endswith('.npz'):
-            raise ValueError("split_indices_file must be a .npz file containing precomputed indices.")
-        # Check if the file exists
-        if not os.path.exists(split_indices_file):
-            raise FileNotFoundError(f"The file {split_indices_file} does not exist.")
-        # Load precomputed indices
-        indices = np.load(split_indices_file)
-        train_indices = indices['train_indices']
-        val_indices = indices['val_indices']
-        test_indices = indices['test_indices']
-    else:
-        # Get indices
-        num_samples = len(dataset)
-        indices = np.arange(num_samples)
-        np.random.seed(random_seed)
-        np.random.shuffle(indices)
-        
-        # Split indices
-        train_idx = int(train_split * num_samples)
-        val_idx = int((1-test_split) * num_samples)
+            self.indices = {
+                'train_indices': indices[:train_idx],
+                'val_indices': indices[train_idx:val_idx],
+                'test_indices': indices[val_idx:]
+            }
+            np.savez('bns_data_indices.npz', **self.indices)
 
-        train_indices = indices[:train_idx]
-        val_indices = indices[train_idx:val_idx]
-        test_indices = indices[val_idx:]
+    def setup(self, stage: str):
+        # Assign train/val datasets for use in dataloaders
+        if stage == "fit":
+            mnist_full = MNIST(self.data_dir, train=True, transform=self.transform)
+            self.train_dataset, self.val_dataset = \
+                Subset(self.dataset, self.indices['train_indices']), \
+                Subset(self.dataset, self.indices['val_indices'])
 
-        np.savez('bns_data_indices.npz', train_indices=train_indices, val_indices=val_indices, test_indices=test_indices)
+        # Assign test dataset for use in dataloader
+        elif stage in ("test", "predict"):
+            self.test_dataset = Subset(self.dataset, self.indices['test_indices'])
 
-    # Ensure indices are unique and sorted
-    train_indices = np.unique(train_indices)
-    val_indices = np.unique(val_indices)
-    test_indices = np.unique(test_indices)
-    train_indices.sort()
-    val_indices.sort()
-    test_indices.sort()
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.train_batch_size, shuffle=True)
 
-    # Ensure indices are within the dataset length
-    if len(train_indices) == 0 or len(val_indices) == 0 or len(test_indices) == 0:
-        raise ValueError("One of the splits has no samples. Check your split ratios and dataset size.")
-    if len(train_indices) + len(val_indices) + len(test_indices) != len(np.unique(np.concatenate((train_indices, val_indices, test_indices)))):
-        raise ValueError("There are duplicate indices across the splits. Ensure that the indices are unique.")
-    if len(train_indices) + len(val_indices) + len(test_indices) != len(dataset):
-        raise ValueError("The total number of indices does not match the dataset size. Check your split ratios and dataset size.")
-    # Check that the indices don't overlap
-    if (set(train_indices) & set(val_indices)) or (set(train_indices) & set(test_indices)) or (set(val_indices) & set(test_indices)):
-        raise ValueError("Indices overlap between train, validation, and test sets. Ensure that the splits are disjoint.")
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.val_batch_size, shuffle=True)
 
-    # Create Subsets
-    train_dataset = Subset(dataset, train_indices)
-    val_dataset = Subset(dataset, val_indices)
-    test_dataset = Subset(dataset, test_indices)
-
-    # Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=val_batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
-
-    return train_loader, val_loader, test_loader
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.test_batch_size, shuffle=False)
+    
+    def predict_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.test_batch_size, shuffle=False)
