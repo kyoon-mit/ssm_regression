@@ -6,7 +6,6 @@ import torch.nn.functional as F
 
 num_dim = 3 # dimensionality of embedding space
 num_repeats = 10 # number of augmentations
-num_points = 200 # length of time series
 
 class ConvResidualBlock(nn.Module):
     def __init__(
@@ -93,13 +92,20 @@ class ConvResidualNet(nn.Module):
 # SimilarityEmbedder Model (backbone: CNN) 
 class SimilarityEmbedding(nn.Module):
     """Simple Dense embedding"""
-    def __init__(self, num_hidden_layers_h=1, num_points=num_points, activation=torch.relu):
+    def __init__(self,
+                 num_hidden_layers_h=1,
+                 num_points=200,
+                 num_dim=num_dim,
+                 hidden_channels=20,
+                 kernel_size=21,
+                 d_output=6,
+                 activation=torch.relu):
         super().__init__()
         self.num_hidden_layers_h = num_hidden_layers_h
 
         self.layers_f = ConvResidualNet(in_channels=num_repeats, out_channels=1,
-                                        hidden_channels=20, num_blocks=4,
-                                        kernel_size=21)
+                                        hidden_channels=hidden_channels, num_blocks=4,
+                                        kernel_size=kernel_size)
         self.contraction_layer = nn.Sequential(
             nn.Linear(num_points, 100),
             nn.ReLU(),
@@ -107,7 +113,7 @@ class SimilarityEmbedding(nn.Module):
         )
         self.expander_layer = nn.Linear(num_dim, 20)
         self.layers_h = nn.ModuleList([nn.Linear(20, 20) for _ in range(num_hidden_layers_h)])
-        self.final_layer = nn.Linear(20, 6)
+        self.final_layer = nn.Linear(20, d_output)
 
         self.activation = activation
 
@@ -130,7 +136,12 @@ class EmbeddingNet(nn.Module):
                  num_hidden_layers_h=2,
                  context_features=3,  # needs to fit the pretraining embedding dimensionality
                  num_repeats=10,  # number of augmentations
+                 num_points=200,
+                 hidden_channels=20,
+                 kernel_size=21,
                  device=None,
+                 d_output=6,
+                 activation=torch.relu,
                  *args,
                  **kwargs
     ):    
@@ -141,7 +152,12 @@ class EmbeddingNet(nn.Module):
         else:
             self.device = torch.device(device)
 
-        self.representation_net = SimilarityEmbedding(num_hidden_layers_h=num_hidden_layers_h)
+        self.representation_net = SimilarityEmbedding(num_hidden_layers_h=num_hidden_layers_h,
+                                                      num_points=num_points,
+                                                      d_output=d_output,
+                                                      hidden_channels=hidden_channels,
+                                                      kernel_size=kernel_size,
+                                                      activation=activation)
         self.representation_net.load_state_dict(torch.load(pretraining, map_location=device, weights_only=True))
 
         # the expander network is unused and hence don't track gradients

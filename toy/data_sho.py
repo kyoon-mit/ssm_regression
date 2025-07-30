@@ -19,9 +19,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 priors = dict()
-priors['omega_0'] = scipy.stats.uniform(loc=0.1, scale=2.0)
+priors['omega_0'] = scipy.stats.uniform(loc=0.1, scale=1.9)
 priors['beta'] = scipy.stats.uniform(loc=0, scale=0.5)
-priors['shift'] = scipy.stats.uniform(loc=-4, scale=4)
+priors['shift'] = scipy.stats.uniform(loc=-4, scale=8)
 
 global num_simulations, num_repeats, num_points, sigma
 num_simulations = 100000 # number of time series to be generated

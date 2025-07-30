@@ -1,5 +1,4 @@
 import wandb
-import logging
 import argparse
 from embedding import Embedding
 
@@ -31,6 +30,25 @@ def parse_args():
     parser.add_argument('-l', '--num_hidden_layers_h', type=int,
                         default=2,
                         help='Number of hidden layers in the embedding model.')
+    parser.add_argument('--num_points', type=int,
+                        default=200,
+                        help='Number of points in the data.')
+    parser.add_argument('--hidden_channels', type=int,
+                        default=20,
+                        help='Number of hidden channels in ConvResidualNet.')
+    parser.add_argument('--kernel_size', type=int,
+                        default=21,
+                        help='Kernel size in ConvResidualNet.')
+    parser.add_argument('--d_output', type=int,
+                        default=6,
+                        help='Output dimensions.')
+    parser.add_argument('--activation', type=str,
+                        default='relu',
+                        choices=['relu', 'tanh'],
+                        help='Activation functions for the similarity embedding.')
+    parser.add_argument('--milestones', type=int, nargs='+',
+                        default=[50, 150],
+                        help='Milestones for the SequentialLR scheduler.')
     parser.add_argument('--logfile', type=str, default=None, help='Name of the log file.')
     parser.add_argument('--loglevel', type=str, default='info',
                         choices=['notset', 'debug', 'info', 'warning', 'error', 'critical'],
@@ -57,10 +75,17 @@ def main():
     # os.environ['WANDB_MODE'] = 'offline'
     wandb.init(project=f'embedding_{datatag}', name=f'embedding_{datatag}_{timestamp}')
 
+    if args.activation=='relu': f_activation = torch.relu
+    if args.activation=='tanh': f_activation = torch.tanh
     task = Embedding(datatype=datatype, datasfx=args.suffix,
                     device=args.device, batch_size=args.batch_size,
-                    num_hidden_layers_h=args.num_hidden_layers_h)
-    task.build_model()
+                    num_points=args.num_points,
+                    num_hidden_layers_h=args.num_hidden_layers_h,
+                    hidden_channels=args.hidden_channels,
+                    kernel_size=args.kernel_size,
+                    d_output=args.d_output,
+                    activation=f_activation)
+    task.build_model(milestones=args.milestones)
 
     print('Start training...')
 
@@ -78,11 +103,13 @@ def main():
         print(f"VicReg wts: {wt_repr=} {wt_cov=} {wt_std=}")
         # Gradient tracking
         task.model.train(True)
-        avg_train_loss = task.train_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
+        avg_train_loss = task.train_one_epoch(epoch_number,
+                                              wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
 
         # no gradient tracking, for validation
         task.model.train(False)
-        avg_val_loss = task.val_one_epoch(epoch_number, wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
+        avg_val_loss = task.val_one_epoch(epoch_number,
+                                          wt_repr=wt_repr, wt_cov=wt_cov, wt_std=wt_std)
 
         print(f"Train/Val Sim Loss after epoch: {avg_train_loss:.4f}/{avg_val_loss:.4f}")
 

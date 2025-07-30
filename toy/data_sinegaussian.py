@@ -50,7 +50,7 @@ def get_sg_data(f_0=None, tau=None, shift=None, _num_points=num_points, _sigma=s
     shift = priors['shift'].rvs() if shift is None else shift
     shift = torch.as_tensor(shift, dtype=torch.float32).clone().detach()
     
-    t_vals = torch.linspace(-1, 10, _num_points).to(dtype=torch.float32)
+    t_vals = torch.linspace(-10, 10, _num_points).to(dtype=torch.float32)
     
     y_clean = sine_gaussian(t_vals, f_0=f_0, tau=tau, shift=shift)
     y_noise = sigma * torch.randn(size=y_clean.size()).to(dtype=torch.float32)

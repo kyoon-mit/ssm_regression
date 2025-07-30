@@ -11,8 +11,13 @@ class Embedding():
     def __init__(
         self,
         batch_size=1000, # batch size for training and validation
+        num_points=200,
         num_hidden_layers_h=2, # number of hidden layers in the embedding model
+        hidden_channels=20,
+        kernel_size=21,
         device=None,
+        activation=torch.relu, # Need to specify
+        d_output=6, # Need to specify
         datatype='SHO', # options: 'SineGaussian', 'SHO'
         datasfx='', # suffix for the dataset, e.g., '_sigma0.4_gaussian'
     ):
@@ -57,21 +62,32 @@ class Embedding():
         self.num_hidden_layers_h = num_hidden_layers_h
         self.optimizer, self.scheduler = None, None
 
-    def build_model(self):
+        self.num_points = num_points
+        self.activation = activation
+        self.d_output = d_output
+        self.hidden_channels = hidden_channels
+        self.kernel_size = kernel_size
+
+    def build_model(self, milestones=[50, 150]):
         logger.info('==> Building embedding model...')
         # Load loss and model
         sys.path.append('/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/modules')
         from losses import VICRegLoss
         from models import SimilarityEmbedding
         self.vicreg_loss = VICRegLoss()
-        self.model = SimilarityEmbedding(num_hidden_layers_h=self.num_hidden_layers_h).to(self.device)
+        self.model = SimilarityEmbedding(num_points=self.num_points,
+                                         num_hidden_layers_h=self.num_hidden_layers_h,
+                                         hidden_channels=self.hidden_channels,
+                                         kernel_size=self.kernel_size,
+                                         activation=self.activation,
+                                         d_output=self.d_output).to(self.device)
         # setup scheduler
         self.optimizer = optim.Adam(self.model.parameters(), lr=5e-3)
         scheduler_1 = optim.lr_scheduler.ConstantLR(self.optimizer, total_iters=2)
         scheduler_2 = optim.lr_scheduler.OneCycleLR(self.optimizer, total_steps=200, max_lr=5e-4)
         scheduler_3 = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
         self.scheduler = optim.lr_scheduler.SequentialLR(
-        self.optimizer, schedulers=[scheduler_1, scheduler_2, scheduler_3], milestones=[50, 150])
+            self.optimizer, schedulers=[scheduler_1, scheduler_2, scheduler_3], milestones=milestones)
         logger.info('...done!')
 
         # print number of trainable parameters
