@@ -19,14 +19,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
 
 priors = dict()
-priors['f_0'] = scipy.stats.uniform(loc=0.1, scale=1)
-priors['tau'] = scipy.stats.uniform(loc=1, scale=4)
-priors['shift'] = scipy.stats.uniform(loc=-2, scale=2)
+priors['f_0'] = scipy.stats.uniform(loc=0.1, scale=0.9)
+priors['tau'] = scipy.stats.uniform(loc=1, scale=3)
+priors['shift'] = scipy.stats.uniform(loc=-2, scale=4)
 
 global num_simulations, num_repeats, num_points, sigma
 num_simulations = 100000 # number of time series to be generated
 num_repeats = 10 # number of augmentations
-num_points = 200 # length of time series
+num_points = 500 # length of time series
 sigma = 0.4 # std of Gaussian to be added as noise
 
 # generate time series data
@@ -66,8 +66,7 @@ def get_sg_data_np(f_0=None, tau=None, shift=None, _num_points=num_points, _sigm
     tau = priors['tau'].rvs() if tau is None else tau
     shift = priors['shift'].rvs() if shift is None else shift
     
-    t_vals = np.linspace(-1, 10, _num_points).astype(np.float32)
-    # t_vals = np.linspace(-5.5, 5.5, _num_points).astype(np.float32)
+    t_vals = np.linspace(-10, 10, _num_points).astype(np.float32)
     
     y_clean = sine_gaussian_np(t_vals, f_0=f_0, tau=tau, shift=shift)
     y_noise = sigma * np.random.randn(*y_clean.shape).astype(np.float32)
