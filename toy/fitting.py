@@ -18,7 +18,11 @@ class Fitting:
         default_shift=1,
         device=None,
         batch_indices=(0, None),
-        **kwargs
+        n_repeats=10,
+        datasfx='',
+        num_points=200,
+        t_vals_start=-1,
+        t_vals_stop=10,
     ):
         """
         Parameters
@@ -31,13 +35,16 @@ class Fitting:
             Device to use ('cpu', 'cuda', or None). If None, automatically selects 'cuda' if available, else 'cpu'.
         batch_indices : tuple, optional
             Indices for test data. Default is (0, None).
-
-        Other Parameters
-        ----------------
         n_repeats : int, optional
-            Number of repeats. Default is 10.
+            Number of repeats for the fitting process. Default is 10.
+        datasfx : str, optional
+            Suffix for the data file. Default is ''.
         num_points : int, optional
-            Number of points. Default is 200.
+            Number of points in the t values. Default is 200.
+        t_vals_start : int, optional
+            Start value for the t values. Default is -1.
+        t_vals_stop : int, optional
+            Stop value for the t values. Default is 10.
 
         Raises
         ------
@@ -47,7 +54,8 @@ class Fitting:
         logger.info(f'Instantiated Fitting() with parameters:\n'
             f'{datatype=}, {default_shift=}, '
             f'{device=}, {batch_indices=}, '
-            f'{", ".join([f"{k}={v}" for k, v in kwargs.items()])}')
+            f'{n_repeats=}, {datasfx=}, {num_points=}, '
+            f'{t_vals_start=}, {t_vals_stop=}')
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         else:
@@ -70,26 +78,27 @@ class Fitting:
             logger.error(msg)
             raise ValueError(msg)
         self.func = func
-        self.basedir = kwargs.get('basedir', f'/ceph/submit/data/user/k/kyoon/KYoonStudy')
-        self.modeldir = kwargs.get('modeldir', os.path.join(self.basedir, 'models', self.datatype))
-        self.savedir = kwargs.get('savedir', os.path.join(self.basedir, 'fitresults'))
-        self.test_dict = torch.load(os.path.join(self.modeldir, kwargs.get('testfile', 'test.pt')),
-                                    map_location=self.device, weights_only=True)
+        self.basedir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy'
+        self.modeldir = os.path.join(self.basedir, 'models', self.datatype)
+        self.savedir = os.path.join(self.basedir, 'fitresults')
+        datafile = os.path.join(self.modeldir, f'test{datasfx}.pt')
+        print(f'Opening {datafile}')
+        self.test_dict = torch.load(datafile, map_location=self.device, weights_only=True)
         self.start_idx = 0 if batch_indices[0] is None else batch_indices[0]
-        self.end_idx = int(self.test_dict['data_unshifted'].shape[0]-1) if batch_indices[1] is None else batch_indices[1]
+        self.end_idx = int(self.test_dict['data_unshifted'].shape[0]) if batch_indices[1] is None else batch_indices[1]
         self.test_data = DataGenerator(self.test_dict)
-        self.test_data_subset = Subset(self.test_data, list(range(self.start_idx, self.end_idx)))
+        self.test_data_subset = Subset(self.test_data, list(range(self.start_idx, self.end_idx+1)))
         self.test_dataloader = DataLoader(
             self.test_data_subset,
             batch_size=1,
             shuffle=False
         )
         self.shift = default_shift
-        self.num_points = kwargs.get('num_points', 200)
-        self.n_repeats = kwargs.get('n_repeats', 10)
-        self.sigma = kwargs.get('sigma', 0.4)
+        self.num_points = num_points
+        self.n_repeats = n_repeats
+        self.sigma = 0.4
 
-        self.t_vals_np = np.linspace(start=-1, stop=10, num=self.num_points)
+        self.t_vals_np = np.linspace(start=t_vals_start, stop=t_vals_stop, num=self.num_points)
 
     def summarize_bilby_event(self, result, truth, event_id):
         desc = result.posterior.describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95])
@@ -167,8 +176,8 @@ class Fitting:
         
         summaries = [] # Container for the event summary dataframes
         for idx, batch in enumerate(self.test_dataloader):
-            theta_u, theta_s, data_u, data_s = batch
-            event_id = idx + self.start_idx
+            theta_u, theta_s, data_u, data_s, event_id = batch
+            event_id = event_id.item()
             truth = theta_u[0][0].to(device='cpu')
             truth_np = truth.numpy()
             y = data_u[0][0].to(device='cpu')
@@ -195,8 +204,8 @@ class Fitting:
             priors['tau'] = Uniform(1., 5., name='tau', latex_label=r'$\tau$')
             injection_parameters = dict(f_0=0.6, tau=2.5)
         for idx, batch in enumerate(self.test_dataloader):
-            theta_u, theta_s, data_u, data_s = batch
-            event_id = idx + self.start_idx
+            theta_u, theta_s, data_u, data_s, event_id = batch
+            event_id = event_id.item()
             truth = theta_u[0][0].to(device='cpu')
             truth_np = truth.numpy()
             y = data_u[0][0].to(device='cpu')

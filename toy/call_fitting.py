@@ -17,6 +17,16 @@ def parse_args():
     parser.add_argument('-b', '--batch-indices', nargs=2, type=int,
                         default=[0,1000],
                         help='Indices of the event id to run on.')
+    parser.add_argument('--datasfx', type=str,
+                        default='_sigma0.4_gaussian',
+                        help='Suffix of the data file.')
+    parser.add_argument('--num_points', type=int,
+                        default=200,
+                        help='Number of points in the t values.')
+    parser.add_argument('--t_vals_start', type=int,
+                        default=-1)
+    parser.add_argument('--t_vals_stop', type=int,
+                        default=10)
     parser.add_argument('--logfile', type=str, default=None, help='Name of the log file.')
     parser.add_argument('--loglevel', type=str, default='info',
                         choices=['notset', 'debug', 'info', 'warning', 'error', 'critical'],
@@ -52,13 +62,15 @@ def configure_logging(logfile, loglevel):
     logger.addHandler(stream_handler)
     return
 
-def run_bilby(datatype, device, batch_indices):
-    fitter = Fitting(datatype=datatype, device=device, batch_indices=batch_indices)
+def run_bilby(datatype, device, batch_indices, datasfx, num_points, t_vals_start, t_vals_stop):
+    fitter = Fitting(datatype=datatype, device=device, batch_indices=batch_indices,
+                     datasfx=datasfx, num_points=num_points, t_vals_start=t_vals_start, t_vals_stop=t_vals_stop)
     fitter.run_bilby()
     return
 
-def run_lmfit(datatype, device, batch_indices):
-    fitter = Fitting(datatype=datatype, device=device, batch_indices=batch_indices)
+def run_lmfit(datatype, device, batch_indices, datasfx, num_points, t_vals_start, t_vals_stop):
+    fitter = Fitting(datatype=datatype, device=device, batch_indices=batch_indices,
+                     datasfx=datasfx, num_points=num_points, t_vals_start=t_vals_start, t_vals_stop=t_vals_stop)
     fitter.run_lmfit()
     return
 
@@ -66,9 +78,11 @@ def main():
     args = parse_args()
     configure_logging(logfile=args.logfile, loglevel=args.loglevel)
     if args.jobtype == 'lmfit':
-        run_lmfit(datatype=args.datatype, device=args.device, batch_indices=tuple(args.batch_indices))
+        run_lmfit(datatype=args.datatype, device=args.device, batch_indices=tuple(args.batch_indices),
+                  datasfx=args.datasfx, num_points=args.num_points, t_vals_start=args.t_vals_start, t_vals_stop=args.t_vals_stop)
     elif args.jobtype == 'bilby':
-        run_bilby(datatype=args.datatype, device=args.device, batch_indices=tuple(args.batch_indices))
+        run_bilby(datatype=args.datatype, device=args.device, batch_indices=tuple(args.batch_indices),
+                  datasfx=args.datasfx, num_points=args.num_points, t_vals_start=args.t_vals_start, t_vals_stop=args.t_vals_stop)
 
 if __name__=='__main__':
     main()

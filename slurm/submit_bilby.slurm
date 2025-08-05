@@ -5,13 +5,12 @@
 #SBATCH --array=0-19
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --mem=2G
 #SBATCH --time=24:00:00
 
 # List of your scripts
 SCRIPTS=(
-/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sg_run_bilby_id{00000..09999..1000}.sh
-/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sho_run_bilby_id{00000..09999..1000}.sh
+$(ls /ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/*_run_bilby_id*.sh | sort)
 )
 
 bash ${SCRIPTS[$SLURM_ARRAY_TASK_ID]}
