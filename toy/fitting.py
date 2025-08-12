@@ -189,7 +189,7 @@ class Fitting:
         summary_df = pd.concat(summaries)
         summary_df.to_parquet(os.path.join(self.savedir, f'lmfit_{self.tag}', f'{self.datatype}_lmfit_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
 
-    def run_bilby(self, nlive=1000, sampler='dynesty', max_workers=4):
+    def run_bilby(self, nlive=1000, sampler='bilby_mcmc', max_workers=4):
         import bilby
         from bilby.core.prior import Uniform
         from bilby.core.likelihood import GaussianLikelihood
@@ -216,11 +216,11 @@ class Fitting:
                 likelihood=log_l, priors=priors, sampler=sampler,
                 nlive=nlive, npool=max_workers,
                 injection_parameters=injection_parameters,
-                outdir=os.path.join(self.savedir, f'bilby_{self.tag}', f'{self.datatype}_id{event_id:05d}'),
+                outdir=os.path.join(self.savedir, sampler, f'bilby_{self.tag}', f'{self.datatype}_id{event_id:05d}'),
                 label=f'{self.datatype}_id{event_id:05d}'
             )
             stats_df = self.summarize_bilby_event(result, truth_np, event_id)
             logger.info(stats_df.head())
             summaries.append(stats_df)
         summary_df = pd.concat(summaries)
-        summary_df.to_parquet(os.path.join(self.savedir, f'bilby_{self.tag}', f'{self.datatype}_bilby_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
+        summary_df.to_parquet(os.path.join(self.savedir, sampler, f'bilby_{self.tag}', f'{self.datatype}_bilby_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))

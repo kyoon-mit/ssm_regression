@@ -668,6 +668,10 @@ class Plotter:
                 csv_output=csv_output)
             omega_diffs, omega_z_scores = self.compute_z_scores(flow_outputs['pred_omega'], flow_outputs['pred_sigma_omega'], flow_outputs['truth_omega'])
             beta_diffs, beta_z_scores   = self.compute_z_scores(flow_outputs['pred_beta'], flow_outputs['pred_sigma_beta'], flow_outputs['truth_beta'])
+            flow_diffs_stacked = np.stack(
+                [omega_diffs.numpy(), beta_diffs.numpy()],
+                axis=1
+            )
             flow_z_scores_stacked = np.stack(
                 [omega_z_scores.numpy(), beta_z_scores.numpy()],
                 axis=1
@@ -763,7 +767,7 @@ class Plotter:
             # quantiles=[0.1587, 0.5, 0.8413],
             levels=(1 - np.exp(-0.5), 1 - np.exp(-2), 1 - np.exp(-9 / 2.)), # 1, 2, 3 sigmas
             # levels=(0.1587, 0.5, 0.8413),
-            plot_density=False,
+            plot_density=True,
             plot_datapoints=False,
             fill_contours=False,
             show_titles=False,
@@ -778,6 +782,12 @@ class Plotter:
             torch.sum((-5 < flow_outputs['pred_omega']) & (flow_outputs['pred_omega'] < 5)).item() if plot_flow else 0,
             torch.sum((-5 < ssm_outputs['pred_param1']) & (ssm_outputs['pred_param1'] < 5)).item()
         ]
+        outliers = [
+            np.sum((bilby_outputs['pred_omega'] < -5) | (bilby_outputs['pred_omega'] > 5)),
+            torch.sum((flow_outputs['pred_omega'] < -5) | (flow_outputs['pred_omega'] > 5)).item() if plot_flow else 0,
+            torch.sum((ssm_outputs['pred_param1'] < -5) | (ssm_outputs['pred_param1'] > 5)).item()
+        ]
+        print(f'Counts: {counts}, Outliers: {outliers}')
         weights = [
             np.ones(counts[0]) / counts[0],
             np.ones(counts[1]) / counts[1] if plot_flow else None,
@@ -791,6 +801,8 @@ class Plotter:
                 color=colors[1],
                 **corner_kwargs
             )
+            print('flow z-score quantiles:', np.quantile(flow_z_scores_stacked, [0.1587, 0.5, 0.8413], axis=0))
+            print('flow diffs quantiles:', np.quantile(flow_diffs_stacked, [0.1587, 0.5, 0.8413], axis=0))
             corner.corner(
                 bilby_z_scores_stacked,
                 fig=figure_z_scores,
@@ -805,10 +817,14 @@ class Plotter:
                 color=colors[0],
                 **corner_kwargs
             )
+        print('bilby z-score quantiles:', np.quantile(bilby_z_scores_stacked, [0.1587, 0.5, 0.8413], axis=0))
+        print('bilby diffs quantiles:', np.quantile(bilby_diffs_stacked, [0.1587, 0.5, 0.8413], axis=0))
+        print('ssm z-score quantiles:', np.quantile(ssm_z_scores_stacked, [0.1587, 0.5, 0.8413], axis=0))
+        print('ssm diffs quantiles:', np.quantile(ssm_diffs_stacked, [0.1587, 0.5, 0.8413], axis=0))
         corner.corner(
             ssm_z_scores_stacked,
             fig=figure_z_scores,
-            weights=weights[2],
+            weights=weights[0],
             color=colors[2],
             **corner_kwargs
         )
@@ -822,7 +838,18 @@ class Plotter:
             fontsize=14, frameon=False,
             bbox_to_anchor=(1.1, 2.2), loc="upper right"
         )
-        for ax in figure_z_scores.get_axes():
+        for i, ax in enumerate(figure_z_scores.get_axes()):
+            if plot_flow:
+                if self.datatype=='SHO':
+                    if i==0:
+                        ax.set_ylim(0, 1.05*ax.get_ylim()[1])
+                    elif i==3:
+                        ax.set_ylim(0, 1.00*ax.get_ylim()[1])
+                elif self.datatype=='SineGaussian':
+                    if i==0:
+                        ax.set_ylim(0, 1.30*ax.get_ylim()[1])
+                    elif i==3:
+                        ax.set_ylim(0, 1.10*ax.get_ylim()[1])
             ax.tick_params(labelsize=14)
 
         # Plot loss per sample as a histogram using matplotlib
@@ -852,7 +879,8 @@ class Plotter:
 
         return
 
-    def get_bilby_results(self, bilby_dir='/ceph/submit/data/user/k/kyoon/KYoonStudy/fitresults'):
+    def get_bilby_results(self, bilby_dir='/ceph/submit/data/user/k/kyoon/KYoonStudy/fitresults/bilby_mcmc',
+                          save_tag='mcmc'):
         """
         Get bilby results.
         """
@@ -865,7 +893,7 @@ class Plotter:
         bilby_parquet = sorted(glob.glob(os.path.join(bilby_dir, f'{self.datatype}_bilby_id*.parquet')))
         if not bilby_parquet:
             raise FileNotFoundError(f'No bilby parquet files found in {bilby_dir} for datatype {self.datatype}')
-        parquet_name = os.path.join(bilby_dir, f'{self.datatype}_bilby_combined.parquet')
+        parquet_name = os.path.join(bilby_dir, f'{self.datatype}_bilby_{save_tag}_combined.parquet')
         if not os.path.exists(parquet_name):
             dfs = []
             for f in bilby_parquet:
