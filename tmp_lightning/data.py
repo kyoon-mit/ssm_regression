@@ -1,31 +1,62 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader, Subset
+import numpy as np
 import lightning as L
 import h5py
 
 class BNSDataset(Dataset):
     def __init__(self,
         hdf5_path,
+        variables, # set of variables
         downsample_factor=1,
         duration=4,
         scale_factor=1.,
         normalize=False
     ):
-        with h5py.File(hdf5_path, 'r') as h5file:
-            self.coalescence_time = h5file.attrs['coalescence_time'] # Time of coalescence
+        super().__init__()
+        self.valid_keys = {'chirp_mass', 'mass_ratio', 'total_mass',
+            'mass_1', 'mass_2', 'dec', 'ra', 'redshift'}
+        self.derived_keys = {'chirp_mass', 'mass_ratio', 'total_mass'}
+        self.h5file = h5py.File(hdf5_path, 'r')
+        if True:
+        # with h5py.File(hdf5_path, 'r') as h5file:
+            self.coalescence_time = self.h5file.attrs['coalescence_time'] # Time of coalescence
             # self.duration = h5file.attrs['duration'] # Duration of the waveform in seconds
             # self.ifos = h5file.attrs['ifos'] # List of interferometers
             # self.length = h5file.attrs['length'] # Number of samples.
             # self.num_injections = h5file.attrs['num_injections'] # Number of waveform injections.
-            self.sample_rate = h5file.attrs['sample_rate'] # Sample rate in Hz
-            self.waveforms_h1 = h5file['waveforms/h1']
-            self.waveforms_l1 = h5file['waveforms/l1']
-            self.param_group = h5file['parameters']
-        self.keys = list(self.param_group.keys())
-        self.length = self.waveforms_h1.shape[0]
+            self.sample_rate = self.h5file.attrs['sample_rate'] # Sample rate in Hz
+            self.waveforms_h1 = self.h5file['waveforms/h1']
+            self.waveforms_l1 = self.h5file['waveforms/l1']
+            self.param_group = self.h5file['parameters']
+            self.length = self.waveforms_h1.shape[0]
+        self.keys = set(variables) & self.valid_keys
+        if not self.keys:
+            raise ValueError(f'Valid variables are: {self.valid_keys}.')
         self.downsample_factor, self.duration = int(downsample_factor), duration
         self.scale_factor = scale_factor
         self.normalize = normalize
+
+    def _prepare_params_(self, idx: int):
+        """
+        Compute derived parameters and update the params dict.
+        Derived parameters include chirp_mass, mass_ratio, and total_mass.
+        """
+        params = dict()
+        params['mass_1'] = torch.tensor(self.param_group['mass_1'][idx], dtype=torch.float32)
+        params['mass_2'] = torch.tensor(self.param_group['mass_2'][idx], dtype=torch.float32)
+
+        if 'chirp_mass' in self.keys:
+            params['chirp_mass'] = (params['mass_1'] * params['mass_2'])**(3/5) / (params['mass_1'] + params['mass_2'])**(1/5)
+
+        if 'mass_ratio' in self.keys:
+            params['mass_ratio'] = params['mass_2'] / params['mass_1']
+
+        if 'total_mass' in self.keys:
+            params['total_mass'] = params['mass_1'] + params['mass_2']
+
+        params.update({k: torch.tensor(self.param_group[k][idx], dtype=torch.float32) for k in (self.keys - self.derived_keys)})
+        return params
 
     def __len__(self):
         return self.length
@@ -44,12 +75,13 @@ class BNSDataset(Dataset):
             l1 = (l1 - l1.mean()) / (l1.std())
             
         # Load parameters as a dictionary
-        params = {k: torch.tensor(self.param_group[k][idx], dtype=torch.float32) for k in self.keys}
+        params = self._prepare_params_(idx)
         return (h1, l1, params, idx)
 
 class LitBNSDataModule(L.LightningDataModule):
     def __init__(self,
         hdf5_path,
+        variables, # set of variables to include in the dataset
         downsample_factor=1,
         duration=64,
         scale_factor=1.,
@@ -58,41 +90,43 @@ class LitBNSDataModule(L.LightningDataModule):
         train_split=0.8, test_split=0.1,
         split_indices_file='', random_seed=42
     ):
-    super().__init__()
-    self.hdf5_path = hdf5_path
-    self.downsample_factor = downsample_factor
-    self.duration = duration
-    self.scale_factor = scale_factor
-    self.normalize = normalize
-    self.train_batch_size = train_batch_size
-    self.val_batch_size = val_batch_size
-    self.test_batch_size = test_batch_size
-    self.train_split = train_split
-    self.test_split = test_split
-    self.split_indices_file = split_indices_file
-    self.random_seed = random_seed
+        super().__init__()
+        self.hdf5_path = hdf5_path
+        self.variables = variables
+        self.downsample_factor = downsample_factor
+        self.duration = duration
+        self.scale_factor = scale_factor
+        self.normalize = normalize
+        self.train_batch_size = train_batch_size
+        self.val_batch_size = val_batch_size
+        self.test_batch_size = test_batch_size
+        self.train_split = train_split
+        self.test_split = test_split
+        self.split_indices_file = split_indices_file
+        self.random_seed = random_seed
 
     def prepare_data(self):
-        self.dataset = BNSDataset(self.hdf5_path, downsample_factor=self.downsample_factor,
+        self.dataset = BNSDataset(self.hdf5_path, variables=self.variables, downsample_factor=self.downsample_factor,
         normalize=self.normalize, duration=self.duration, scale_factor=self.scale_factor)
         if self.split_indices_file:
             if not self.split_indices_file.endswith('.npz'):
                 raise ValueError("split_indices_file must be a .npz file containing precomputed indices.")
             # Check if the file exists
+            import os
             if not os.path.exists(self.split_indices_file):
                 raise FileNotFoundError(f"The file {self.split_indices_file} does not exist.")
             # Load precomputed indices
             self.indices = np.load(self.split_indices_file)
         else:
             # Get indices
-            num_samples = len(dataset)
+            num_samples = len(self.dataset)
             indices = np.arange(num_samples)
-            np.random.seed(random_seed)
+            np.random.seed(self.random_seed)
             np.random.shuffle(indices)
             
             # Split indices
-            train_idx = int(train_split * num_samples)
-            val_idx = int((1-test_split) * num_samples)
+            train_idx = int(self.train_split * num_samples)
+            val_idx = int((1-self.test_split) * num_samples)
 
             self.indices = {
                 'train_indices': indices[:train_idx],
@@ -104,7 +138,6 @@ class LitBNSDataModule(L.LightningDataModule):
     def setup(self, stage: str):
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
-            mnist_full = MNIST(self.data_dir, train=True, transform=self.transform)
             self.train_dataset, self.val_dataset = \
                 Subset(self.dataset, self.indices['train_indices']), \
                 Subset(self.dataset, self.indices['val_indices'])

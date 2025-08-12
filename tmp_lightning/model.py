@@ -1,39 +1,60 @@
-from torch import nn
+import sys
+sys.path.append('/n/holystore01/LABS/iaifi_lab/Lab/kyoon/ssm_regression/modules')
 from s4d import S4D
-import lightning as L
+import torch
+import torch.nn.functional as F
+from torch import nn, optim
+from lightning.pytorch import LightningModule
 
-class LitS4Model(nn.Module):
+class LitS4Model(LightningModule):
     def __init__(
         self,
         d_input,
         d_output,
-        loss:str,
         d_model=256,
         n_layers=4,
+        loss='NLLGaussian',
         dropout=0.2,
-        prenorm=False,
         lr=0.01,
+        prenorm=False
     ):
         super().__init__()
         self.save_hyperparameters()
+        # Do not set self.device directly; Lightning will manage devices.
+        # If you need device info, query `self.device` during `forward` or later.
         dropout_fn = nn.Dropout1d
         self.encoder = nn.Linear(d_input, d_model)
         self.decoder = nn.Linear(d_model, d_output)
+        self.n_outparams = d_output # placeholder
         # Stack S4 layers as residual blocks
         self.s4_layers, self.norms, self.dropouts =\
             nn.ModuleList(), nn.ModuleList(), nn.ModuleList()
         for _ in range(n_layers):
             self.s4_layers.append(
-                S4D(d_model, dropout=dropout, transposed=True, lr=min(0.001, 0.01))
+                S4D(d_model, dropout=dropout, transposed=True, lr=lr)
             )
             self.norms.append(nn.LayerNorm(d_model))
             self.dropouts.append(dropout_fn(dropout))
-        if loss=='NLLGaussian':
+        if self.hparams.loss=='NLLGaussian':
             if not (d_output % 2 == 0): raise ValueError(f'If {loss=}, d_output must be an even number.')
             from losses import NLLGaussianUncertainties
             self.criterion = NLLGaussianUncertainties()
+            self.n_outparams = int(d_output / 2)
         else:
             raise ValueError(f'Invalid option for {loss=}.')
+
+    def __loss__(self, batch):
+        h1, l1, params, idx = batch
+        device = h1.device
+        inputs = torch.stack([h1.to(device), l1.to(device)], dim=2)
+        targets = torch.stack(list(params.values()), dim=1)
+        outputs = self.forward(inputs)
+        loss = 1e3
+        if self.hparams.loss=='NLLGaussian':
+            preds = outputs[:,:self.n_outparams]
+            variances = outputs[:,self.n_outparams:self.n_outparams * 2]
+            loss = self.criterion(preds, targets, variances)
+        return loss
 
     def forward(self, x):
         """
@@ -73,27 +94,38 @@ class LitS4Model(nn.Module):
         return optimizer, scheduler
 
     def training_step(self, batch, batch_idx):
-        X, y = batch
-        y_hat = self.forward(X)
-        loss = self.criterion(y_hat, y)
+        loss = self.__loss__(batch)
         self.log("train/loss",
-                loss,
-                on_step=False,
-                on_epoch=True,
-                reduce_fx='mean',
-                logger=True,
-                prog_bar=True)
+            loss,
+            on_step=False,
+            on_epoch=True,
+            reduce_fx='mean',
+            logger=True,
+            prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        X, y = batch
-        y_hat = self.forward(X)
-        loss = self.criterion(y_hat, y)
+        loss = self.__loss__(batch)
         self.log("val/loss",
-                loss,
-                on_step=False,
-                on_epoch=True,
-                reduce_fx='mean',
-                logger=True,
-                prog_bar=True)
+            loss,
+            on_step=False,
+            on_epoch=True,
+            reduce_fx='mean',
+            logger=True,
+            prog_bar=True)
         return loss
+
+    def test_step(self, batch, batch_idx):
+        loss = self.__loss__(batch)
+        self.log("test/loss",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            reduce_fx='mean',
+            logger=True,
+            prog_bar=True)
+        return
+
+    def predict_step(self, batch, batch_idx):
+        self.test_step(batch, batch_idx)
+        return
