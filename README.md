@@ -8,7 +8,7 @@ There are two toy datasets (described in the paper):
 For data generation, simply do
 ```
 python data_sho.py
-python data_sinegaussin.py
+python data_sinegaussian.py
 ```
 Make sure to open the files first and modify ```savepath```.
 
