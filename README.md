@@ -14,3 +14,5 @@ Make sure to open the files first and modify ```savepath```.
 
 ## Training
 Modify the files in ```slurm/bash_scripts``` so that your conda installation and ```BASE_DIR``` are correctly pointed. Submit your training via e.g. ```slurm/submit_regression.slurm```.
+
+! Make sure to modify ```toy/regression.py``` so that ```self.datadir``` points to the right place.
