@@ -31,7 +31,7 @@ def parse_args():
                         help='Batch size for training.')
     parser.add_argument('-s', '--suffix', type=str,
                         default='',
-                        help='Suffix for the dataset, e.g., "_sigma0.4_gaussian".')
+                        help='Suffix for the dataset, e.g., "_gaussian_smear_sigma0.4".')
     parser.add_argument('--d_model', type=int,
                         default=6,
                         help='Dimension of the model.')

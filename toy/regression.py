@@ -55,7 +55,7 @@ class SSMRegression():
         self.datatype = datatype
         self.loss = loss
 
-        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
+        self.datadir = f'./models/{self.datatype}' # MODIFY HERE
         self.modeldir = os.path.join(self.datadir, 'output')
 
         if load_data:

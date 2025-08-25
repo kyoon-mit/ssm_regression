@@ -10,10 +10,12 @@ np.random.seed(SEED)
 torch.manual_seed(SEED)
 random.seed(SEED)
 
-# path = '/n/holystore01/LABS/iaifi_lab/Users/creissel/SHO/'
-savepath = '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian'
-global sfx
-sfx = '_sigma0.4_gaussian'
+num_simulations = 100000 # number of time series to be generated
+num_repeats = 10 # number of augmentations
+num_points = 500 # length of time series
+sigma = 0.4 # std of Gaussian to be added as noise
+
+savepath = './models/SineGaussian' # MODIFY YOUR DIRECTORY HERE
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using {device=}")
@@ -22,12 +24,6 @@ priors = dict()
 priors['f_0'] = scipy.stats.uniform(loc=0.1, scale=0.9)
 priors['tau'] = scipy.stats.uniform(loc=1, scale=3)
 priors['shift'] = scipy.stats.uniform(loc=-2, scale=4)
-
-global num_simulations, num_repeats, num_points, sigma
-num_simulations = 100000 # number of time series to be generated
-num_repeats = 10 # number of augmentations
-num_points = 500 # length of time series
-sigma = 0.4 # std of Gaussian to be added as noise
 
 # generate time series data
 
@@ -55,9 +51,7 @@ def get_sg_data(f_0=None, tau=None, shift=None, _num_points=num_points, _sigma=s
     y_clean = sine_gaussian(t_vals, f_0=f_0, tau=tau, shift=shift)
     y_noise = sigma * torch.randn(size=y_clean.size()).to(dtype=torch.float32)
     y = y_clean + y_noise
-    # y += _sigma * torch.randn(size=y.size()).to(dtype=torch.float32)
-    # y += torch.poisson(input=torch.abs(y)).to(dtype=torch.float32)
-    
+
     return t_vals, y, y_clean, y_noise, f_0, tau, shift
 
 def get_sg_data_np(f_0=None, tau=None, shift=None, _num_points=num_points, _sigma=sigma):
@@ -71,8 +65,6 @@ def get_sg_data_np(f_0=None, tau=None, shift=None, _num_points=num_points, _sigm
     y_clean = sine_gaussian_np(t_vals, f_0=f_0, tau=tau, shift=shift)
     y_noise = sigma * np.random.randn(*y_clean.shape).astype(np.float32)
     y = y_clean + y_noise
-    # y += _sigma * torch.randn(size=y.size()).to(dtype=torch.float32)
-    # y += torch.poisson(input=torch.abs(y)).to(dtype=torch.float32)
     
     return t_vals, y, y_clean, y_noise, f_0, tau, shift
 
@@ -81,11 +73,7 @@ def generate_dataset():
     theta_unshifted_vals = []
     theta_shifted_vals = []
     data_unshifted_vals = []
-    data_clean_unshifted_vals = []
-    data_noise_unshifted_vals = []
     data_shifted_vals = []
-    data_clean_shifted_vals = []
-    data_noise_shifted_vals = []
     event_id = []
     t_vals_array = []
 
@@ -97,8 +85,6 @@ def generate_dataset():
         theta_unshifted = torch.tensor([f_0_u, tau_u, shift_u]).repeat(num_repeats, 1).to(device=device)
         theta_unshifted_vals.append(theta_unshifted)
         data_unshifted_vals.append(y_unshifted.repeat(num_repeats, 1).to(device=device))
-        # data_clean_unshifted_vals.append(y_clean_u.repeat(num_repeats, 1).to(device=device))
-        # data_noise_unshifted_vals.append(y_noise_u.repeat(num_repeats, 1).to(device=device))
         # generate shifted data
         theta_shifted = []
         data_shifted = []
@@ -113,10 +99,7 @@ def generate_dataset():
             data_shifted.append(y_shifted)
         theta_shifted_vals.append(torch.stack(theta_shifted).to(device=device))
         data_shifted_vals.append(torch.stack(data_shifted).to(device=device))
-        # data_clean_shifted_vals.append(y_clean_s.repeat(num_repeats, 1).to(device=device))
-        # data_noise_shifted_vals.append(y_noise_s.repeat(num_repeats, 1).to(device=device))
         event_id.append(ii)
-        # t_vals_array.append(t_vals)
 
     # Return dictionary of tensors
     return_dict = {
@@ -124,11 +107,6 @@ def generate_dataset():
         'theta_s': torch.stack(theta_shifted_vals),
         'data_u':  torch.stack(data_unshifted_vals),
         'data_s':  torch.stack(data_shifted_vals),
-        # 'data_clean_u': torch.stack(data_clean_unshifted_vals),
-        # 'data_noise_u': torch.stack(data_noise_unshifted_vals),
-        # 'data_clean_s': torch.stack(data_clean_shifted_vals),
-        # 'data_noise_s': torch.stack(data_noise_shifted_vals),
-        # 't_vals': torch.stack(t_vals_array),
         'event_id': torch.tensor(event_id, dtype=torch.int32),
     }
 
@@ -140,11 +118,6 @@ class DataGenerator(Dataset):
         self.theta_shifted_vals   = data['theta_s']
         self.data_unshifted_vals  = data['data_u']
         self.data_shifted_vals    = data['data_s']
-        # self.data_clean_unshifted_vals = data['data_clean_u']
-        # self.data_noise_unshifted_vals = data['data_noise_u']
-        # self.data_clean_shifted_vals = data['data_clean_s']
-        # self.data_noise_shifted_vals = data['data_noise_s']
-        # self.t_vals = data['t_vals']
         self.event_id = data['event_id']
 
     def __len__(self):
@@ -159,16 +132,10 @@ class DataGenerator(Dataset):
             self.theta_shifted_vals[idx].to(dtype=torch.float32),
             self.data_unshifted_vals[idx].to(dtype=torch.float32),
             self.data_shifted_vals[idx].to(dtype=torch.float32),
-            # self.data_clean_unshifted_vals[idx].to(dtype=torch.float32),
-            # self.data_noise_unshifted_vals[idx].to(dtype=torch.float32),
-            # self.data_clean_shifted_vals[idx].to(dtype=torch.float32),
-            # self.data_noise_shifted_vals[idx].to(dtype=torch.float32),
-            # self.t_vals[idx].to(dtype=torch.float32),
             self.event_id[idx].to(dtype=torch.int32),
         )
 
 def save_raw_tensors(theta_u, theta_s, data_u, data_s,
-                    #  data_clean_u, data_noise_u, data_clean_s, data_noise_s, t_vals,
                     event_id):
     # Split indices
     num_total  = theta_u.shape[0]
@@ -187,11 +154,6 @@ def save_raw_tensors(theta_u, theta_s, data_u, data_s,
             'theta_s': theta_s[idx],
             'data_u':  data_u[idx],
             'data_s':  data_s[idx],
-            # 'data_clean_u': data_clean_u[idx],
-            # 'data_noise_u': data_noise_u[idx],
-            # 'data_clean_s': data_clean_s[idx],
-            # 'data_noise_s': data_noise_s[idx],
-            # 't_vals':  t_vals[idx],
             'event_id': event_id[idx],
         }, os.path.join(savepath, f'{name}.pt'))
 
@@ -200,6 +162,8 @@ def save_raw_tensors(theta_u, theta_s, data_u, data_s,
     save_split(f'test{sfx}', test_idx)
 
 if __name__=='__main__':
+    sigma = 0.4
+    sfx = f'_gaussian_smear_sigma{sigma:.1f}'
     dataset = generate_dataset()
     save_raw_tensors(**dataset)
     print(f'Files are saved to \'{savepath}\'.')
