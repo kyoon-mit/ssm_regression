@@ -25,8 +25,14 @@ class Embedding():
         # Load datasets
         if datatype=='SineGaussian':
             from data_sinegaussian import DataGenerator
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG'
+            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/SG'
         elif datatype=='SHO':
             from data_sho import DataGenerator
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO'
+            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/DHO'
+        else:
+            raise ValueError(f'Unknown {datatype=}')
 
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -35,9 +41,6 @@ class Embedding():
         logger.info(f"Using device={self.device}")
         
         self.datatype = datatype
-
-        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{datatype}'
-        self.modeldir = os.path.join(self.datadir, 'output')
 
         self.train_dict = torch.load(os.path.join(self.datadir, f'train{datasfx}.pt'), map_location=device, weights_only=True)
         self.val_dict = torch.load(os.path.join(self.datadir, f'val{datasfx}.pt'), map_location=device, weights_only=True)

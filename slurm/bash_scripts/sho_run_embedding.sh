@@ -1,8 +1,8 @@
 source /work/submit/kyoon/miniforge3/etc/profile.d/conda.sh
 conda activate ssm
 BASE_DIR="/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression"
-python ${BASE_DIR}/toy/call_embedding.py -t SHO -s _sigma0.4_gaussian \
--e 220 \
+python ${BASE_DIR}/toy/call_embedding.py -t SHO -s _dho_gaussian_white_sigma5.65685 \
+-e 200 \
 -l 2 \
 --num_points 200 \
 --hidden_channels 20 \
@@ -10,6 +10,6 @@ python ${BASE_DIR}/toy/call_embedding.py -t SHO -s _sigma0.4_gaussian \
 --d_output 6 \
 --milestones 50 100 \
 --activation 'relu' \
--d cpu \
+-d cuda \
 --logfile="${BASE_DIR}/slurm/logs/sho_embedding.out" \
---comment="Gaussian noise with sigma 0.4; num_hidden_layers=2"
+--comment="Gaussian white noise with sigma 0.4; num_hidden_layers=2"
