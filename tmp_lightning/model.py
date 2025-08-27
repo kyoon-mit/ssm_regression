@@ -83,7 +83,7 @@ class LitS4Model(LightningModule):
         # Decode the outputs
         x = self.decoder(x)  # (B, d_model) -> (B, d_output)
         if self.hparams.loss=='NLLGaussian':
-            mid_idx = int(self.d_output/2)
+            mid_idx = int(self.hparams.d_output/2)
             x_uncertainties = F.softplus(x[..., mid_idx:])
             x = torch.cat([x[..., :mid_idx], x_uncertainties], dim=-1)
         return x
@@ -93,7 +93,13 @@ class LitS4Model(LightningModule):
         scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
         return optimizer, scheduler
 
+    def on_train_start(self):
+        # free any leftover GPU memory on startup
+        torch.cuda.empty_cache()
+
     def training_step(self, batch, batch_idx):
+        # Clear GPU cache
+        torch.cuda.empty_cache()
         loss = self.__loss__(batch)
         self.log("train/loss",
             loss,
@@ -105,6 +111,8 @@ class LitS4Model(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        # Clear GPU cache
+        torch.cuda.empty_cache()
         loss = self.__loss__(batch)
         self.log("val/loss",
             loss,
@@ -116,6 +124,8 @@ class LitS4Model(LightningModule):
         return loss
 
     def test_step(self, batch, batch_idx):
+        # Clear GPU cache
+        torch.cuda.empty_cache()
         loss = self.__loss__(batch)
         self.log("test/loss",
             loss,
@@ -127,5 +137,7 @@ class LitS4Model(LightningModule):
         return
 
     def predict_step(self, batch, batch_idx):
+        # Clear GPU cache
+        torch.cuda.empty_cache()
         self.test_step(batch, batch_idx)
         return

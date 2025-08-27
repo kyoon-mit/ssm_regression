@@ -55,6 +55,8 @@ class BNSDataset(Dataset):
         if 'total_mass' in self.keys:
             params['total_mass'] = params['mass_1'] + params['mass_2']
 
+        params.pop('mass_1')
+        params.pop('mass_2')
         params.update({k: torch.tensor(self.param_group[k][idx], dtype=torch.float32) for k in (self.keys - self.derived_keys)})
         return params
 
@@ -106,6 +108,9 @@ class LitBNSDataModule(L.LightningDataModule):
         self.random_seed = random_seed
 
     def prepare_data(self):
+        if hasattr(self, 'dataset'):
+            # already prepared
+            return
         self.dataset = BNSDataset(self.hdf5_path, variables=self.variables, downsample_factor=self.downsample_factor,
         normalize=self.normalize, duration=self.duration, scale_factor=self.scale_factor)
         if self.split_indices_file:
@@ -136,6 +141,8 @@ class LitBNSDataModule(L.LightningDataModule):
             np.savez('bns_data_indices.npz', **self.indices)
 
     def setup(self, stage: str):
+        if not hasattr(self, 'dataset'):
+            self.prepare_data()
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
             self.train_dataset, self.val_dataset = \
@@ -150,7 +157,7 @@ class LitBNSDataModule(L.LightningDataModule):
         return DataLoader(self.train_dataset, batch_size=self.train_batch_size, shuffle=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.val_batch_size, shuffle=True)
+        return DataLoader(self.val_dataset, batch_size=self.val_batch_size, shuffle=False, num_workers=8)
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.test_batch_size, shuffle=False)

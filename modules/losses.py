@@ -154,7 +154,7 @@ class NLLGaussianUncertainties(nn.Module):
     """
     def __init__(self):
         super().__init__()
-        self.criterion = nn.GaussainNLLLoss(reduction='mean', full=False, eps=1e-9)
+        self.criterion = nn.GaussianNLLLoss(reduction='mean', full=False, eps=1e-9)
 
     def forward(self, preds, targets, variances):
         return self.criterion(preds, targets, variances)
