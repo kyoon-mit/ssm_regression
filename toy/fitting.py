@@ -66,12 +66,12 @@ class Fitting:
             from data_sho import damped_sho_np as func
             from data_sho import DataGenerator
             self.tag = 'sho'
-            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO'
+            self.modeldir = '/n/holystore01/LABS/iaifi_lab/Lab/kyoon/neurips2025/data/DHO'
         elif self.datatype=='SineGaussian':
             from data_sinegaussian import sine_gaussian_np as func
             from data_sinegaussian import DataGenerator
             self.tag = 'sg'
-            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG'
+            self.modeldir = '/n/holystore01/LABS/iaifi_lab/Lab/kyoon/neurips2025/data/SG'
         elif self.datatype=='LIGO':
             self.tag = 'ligo'
             pass #TODO
@@ -80,7 +80,7 @@ class Fitting:
             logger.error(msg)
             raise ValueError(msg)
         self.func = func
-        self.basedir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy'
+        self.basedir = f'/n/holystore01/LABS/iaifi_lab/Lab/kyoon'
         # self.modeldir = os.path.join(self.basedir, 'models', self.datatype)
         self.savedir = os.path.join(self.basedir, 'fitresults', f'd{datasfx}')
         datafile = os.path.join(self.modeldir, f'test{datasfx}.pt')
@@ -218,11 +218,11 @@ class Fitting:
                 likelihood=log_l, priors=priors, sampler=sampler,
                 nlive=nlive, npool=max_workers,
                 injection_parameters=injection_parameters,
-                outdir=os.path.join(self.savedir, sampler, f'bilby_{self.tag}', f'{self.datatype}_id{event_id:05d}'),
+                outdir=os.path.join(self.savedir, f'{sampler}_{self.tag}', f'{self.datatype}_id{event_id:05d}'),
                 label=f'{self.datatype}_id{event_id:05d}'
             )
             stats_df = self.summarize_bilby_event(result, truth_np, event_id)
             logger.info(stats_df.head())
             summaries.append(stats_df)
         summary_df = pd.concat(summaries)
-        summary_df.to_parquet(os.path.join(self.savedir, sampler, f'bilby_{self.tag}', f'{self.datatype}_bilby_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
+        summary_df.to_parquet(os.path.join(self.savedir, f'{sampler}_{self.tag}', f'{self.datatype}_bilby_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))

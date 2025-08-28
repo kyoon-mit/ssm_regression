@@ -17,16 +17,17 @@ def main():
     script_dir = Path(__file__).resolve().parent.parent
     bash_dir = script_dir / 'bash_scripts'
 
-    for i in range(0, 10000, 1000):
-        start, end = f'{i:05d}', f'{i+999:05d}'
+    for i in range(0, 10000, 100):
+        start, end = f'{i:05d}', f'{i+99:05d}'
         filename = bash_dir / f'{datatag}_run_bilby_id{start}-{end}.sh'
         script_content = f'''#!/bin/bash
-source /work/submit/kyoon/miniforge3/etc/profile.d/conda.sh
+source /n/home04/kyoon/miniforge3/etc/profile.d/conda.sh
 conda activate ssm
-BASE_DIR="/ceph/submit/data/user/k/kyoon/KYoonStudy"
-python /ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/toy/call_fitting.py -t {args.datatype} -j bilby -b {start} {end} \\
+BASE_DIR="/n/holystore01/LABS/iaifi_lab/Lab/kyoon"
+python ${{BASE_DIR}}/ssm_regression/toy/call_fitting.py -t {args.datatype} -j bilby -b {start} {end} \\
+--datasfx {args.datasfx} \\
 --num_points {args.num_points} --t_vals_start {args.t_vals_start} --t_vals_stop {args.t_vals_stop} \\
---logfile="${{BASE_DIR}}/fitresults/bilby_sho/id{start}-{end}.log"
+--logfile="${{BASE_DIR}}/logs/bilby_{datatag}/id{start}-{end}.log"
 '''
         with open(filename, 'w') as f:
             f.write(script_content)
