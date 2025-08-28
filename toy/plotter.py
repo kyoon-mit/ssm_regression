@@ -28,16 +28,19 @@ class Plotter:
         # Load datasets
         if datatype == 'SineGaussian':
             from data_sinegaussian import DataGenerator
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG'
         elif datatype == 'SHO':
             from data_sho import DataGenerator
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO'
         elif datatype == 'LIGO':
             pass  # TODO: Placeholder for LIGO data generator, implement as needed
         else:
             raise ValueError(f'Unknown datatype: {datatype}')
+        
         self.datatype = datatype
-        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{datatype}'
+        self.datasfx = datasfx
 
-        self.test_dict  = torch.load(os.path.join(self.datadir, f'test{datasfx}.pt'), map_location=torch.device(self.device), weights_only=True)
+        self.test_dict  = torch.load(os.path.join(self.datadir, f'test{self.datasfx}.pt'), map_location=torch.device(self.device), weights_only=True)
         self.test_data  = DataGenerator(self.test_dict)
 
         self.test_data_loader = DataLoader(
@@ -677,7 +680,7 @@ class Plotter:
                 axis=1
             )
 
-        bilby_outputs = self.get_bilby_results()
+        bilby_outputs = self.get_bilby_results(bilby_dir=f'/ceph/submit/data/user/k/kyoon/KYoonStudy/fitresults/d{self.datasfx}/bilby_mcmc')
         bilby_omega_diffs, bilby_omega_z_scores = self.compute_z_scores(
             bilby_outputs['pred_omega'], bilby_outputs['pred_sigma_omega'], bilby_outputs['truth_omega']
         )
@@ -945,7 +948,7 @@ if __name__ == "__main__":
         'num_points': 500
     }
     sho_ssm_nllgaussian_params = {
-        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250801140434.path',
+        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/DHO/model.SSM.SHO.NLLGaussian.250827165455.path',
         'd_model': 6,
         'n_layers': 4,
         'save_prefix': 'ssm_d6_n4',
@@ -981,16 +984,23 @@ if __name__ == "__main__":
         'plot_flow': True
     }
     
-    plotter = Plotter(datatype='SHO', datasfx='_sigma0.4_gaussian')
+    plotter = Plotter(datatype='SHO', datasfx='_dho_gaussian_pink_sigma0.4')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250720075718.pt',
     #                         num_hidden_layers_h=2)
     # plotter.plot_flow(**sho_flow_params)
     plotter.plot_ssm_predictions(**sho_ssm_nllgaussian_params, **sho_flow_params)
     plotter.plot_ssm_predictions(**sho_ssm_quantile_params, **sho_flow_params)
+
+    plotter = Plotter(datatype='SineGaussian', datasfx='_sg_gaussian_pink_sigma0.4')
+    # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250720075718.pt',
+    #                         num_hidden_layers_h=2)
+    # plotter.plot_flow(**sho_flow_params)
+    plotter.plot_ssm_predictions(**sg_ssm_nllgaussian_params, **sg_flow_params)
+    plotter.plot_ssm_predictions(**sg_ssm_quantile_params, **sg_flow_params)
     
-    plotter = Plotter(datatype='SineGaussian', datasfx='_sigma0.4_gaussian')
+    # plotter = Plotter(datatype='SineGaussian', datasfx='_sigma0.4_gaussian')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250720075718.pt',
     #                         num_hidden_layers_h=2)
     # plotter.plot_flow(**sg_flow_params)
-    plotter.plot_ssm_predictions(**sg_ssm_nllgaussian_params, **sg_flow_params)
-    plotter.plot_ssm_predictions(**sg_ssm_quantile_params, **sg_flow_params)
+    # plotter.plot_ssm_predictions(**sg_ssm_nllgaussian_params, **sg_flow_params)
+    # plotter.plot_ssm_predictions(**sg_ssm_quantile_params, **sg_flow_params)

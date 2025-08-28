@@ -31,8 +31,6 @@ class Embedding():
             from data_sho import DataGenerator
             self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO'
             self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/DHO'
-        else:
-            raise ValueError(f'Unknown {datatype=}')
 
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

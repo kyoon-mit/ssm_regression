@@ -28,6 +28,9 @@ class NormalizingFlow():
             num_blocks=4,
             hidden_features=50,
             embed_hidden_layers=2,
+            embed_hidden_channels=10,
+            embed_kernel_size=11,
+            embed_d_output=12,
             context_features=3,  # needs to fit the pretraining embedding dimensionality
             num_points=200,  # length of time series
             num_repeats=10,  # number of augmentations
@@ -37,10 +40,14 @@ class NormalizingFlow():
         # Load datasets
         if datatype=='SineGaussian':
             from data_sinegaussian import DataGenerator
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG'
+            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/SG'
         elif datatype=='SHO':
             from data_sho import DataGenerator
-        elif datatype=='LIGO':
-            pass # TODO: implement LIGO data loading
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO'
+            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/DHO'
+        else:
+            raise ValueError(f'Unknown {datatype=}')
 
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -48,8 +55,6 @@ class NormalizingFlow():
             self.device = torch.device(device)
 
         self.datatype = datatype
-        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
-        self.modeldir = os.path.join(self.datadir, 'output')
         if not embed_model:
             raise ValueError("Pretraining path must be provided.")
         self.pretraining = embed_model
@@ -59,6 +64,9 @@ class NormalizingFlow():
         self.num_blocks = num_blocks
         self.hidden_features = hidden_features
         self.embed_hidden_layers = embed_hidden_layers
+        self.embed_hidden_channels = embed_hidden_channels
+        self.embed_kernel_size = embed_kernel_size
+        self.embed_d_output = embed_d_output
         self.context_features = context_features
         self.num_points = num_points
         self.num_repeats = num_repeats
@@ -105,7 +113,13 @@ class NormalizingFlow():
             ]
             transforms += block
         transform = CompositeTransform(transforms)
-        embedding_net = EmbeddingNet(self.pretraining, num_hidden_layers_h=self.embed_hidden_layers, device=self.device)
+        embedding_net = EmbeddingNet(self.pretraining,
+                                     num_points=self.num_points,
+                                     num_hidden_layers_h=self.embed_hidden_layers,
+                                     hidden_channels=self.embed_hidden_channels,
+                                     kernel_size=self.embed_kernel_size,
+                                     d_output=self.embed_d_output,
+                                     device=self.device)
         self.flow = Flow(transform, base_dist, embedding_net).to(device=self.device)
         # print number of parameters
         print('Total number of NOT fixed weights in embedding net', sum(p.numel() for p in self.flow._embedding_net.parameters() if p.requires_grad))
@@ -121,9 +135,13 @@ class NormalizingFlow():
         for idx, val in enumerate(self.train_data_loader, 1):
             _, augmented_theta, _, augmented_data, _ = val
             augmented_theta = augmented_theta[...,0:2]
+            augmented_theta = augmented_theta.repeat(1, self.num_repeats, 1) # TODO: temporary fix
 
-            theta = augmented_theta.reshape(-1, 2)
-            data = augmented_data.reshape(-1, 1, self.num_points)
+            # print(augmented_theta.shape) # (batch_size, num_repeat, 2)
+            # print(augmented_data.shape)  # (batch_size, num_repeat, 500)
+
+            theta = augmented_theta.reshape(-1, 2) # (batch_size * num_repeat, 2)
+            data = augmented_data.reshape(-1, 1, self.num_points) # (batch_size * num_repeat, 1, 500)
 
             flow_loss = - self.flow.log_prob(theta, context=data).mean()
 

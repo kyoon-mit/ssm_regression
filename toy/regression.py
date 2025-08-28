@@ -35,10 +35,14 @@ class SSMRegression():
         # Load datasets
         if datatype=='SineGaussian':
             from data_sinegaussian import DataGenerator
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG'
+            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/SG'
         elif datatype=='SHO':
             from data_sho import DataGenerator
-        elif datatype=='LIGO':
-            pass # TODO: implement LIGO data loading
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO'
+            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/DHO'
+        else:
+            raise ValueError(f'Unknown {datatype=}')
 
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -54,9 +58,6 @@ class SSMRegression():
         self.prenorm = prenorm
         self.datatype = datatype
         self.loss = loss
-
-        self.datadir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy/models/{self.datatype}'
-        self.modeldir = os.path.join(self.datadir, 'output')
 
         if load_data:
             self.train_dict = torch.load(os.path.join(self.datadir, f'train{datasfx}.pt'), map_location=self.device, weights_only=True)

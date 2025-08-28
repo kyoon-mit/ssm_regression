@@ -3,7 +3,6 @@
 #SBATCH --output=/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/logs/flow_%A_%a.out
 #SBATCH --error=/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/logs/flow_%A_%a.err
 #SBATCH --partition=submit-gpu
-#SBATCH --nodelist=submit77-1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=10G

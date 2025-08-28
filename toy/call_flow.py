@@ -18,8 +18,16 @@ def parse_args():
                         help='Data type or dataset.')
     parser.add_argument('--embed_model', type=str,
                         help='Full path to the embedding model.')
+    parser.add_argument('--num_points', type=int,
+                        help='Number of points in the time series data.')
     parser.add_argument('-l', '--embed_hidden_layers', type=int,
                         help='Number of hidden layers in the embedding model.')    
+    parser.add_argument('--embed_hidden_channels', type=int,
+                        help='Number of hidden channels in the embedding model.')    
+    parser.add_argument('--embed_kernel_size', type=int,
+                        help='Number of kernels in the embedding model.')    
+    parser.add_argument('--embed_d_output', type=int,
+                        help='Output dimensions of the embedding model.')    
     parser.add_argument('--hidden_features', type=int,
                         default=50,
                         help='Number of hidden features in the flow.')
@@ -65,10 +73,17 @@ def main():
     # os.environ['WANDB_MODE'] = 'offline'
     wandb.init(project=f'flow_{datatag}', name=f'flow_{datatag}_{timestamp}')
 
-    task = NormalizingFlow(embed_model=args.embed_model, datatype=datatype, datasfx=args.suffix,
+    task = NormalizingFlow(embed_model=args.embed_model,
+                           datatype=datatype,
+                           datasfx=args.suffix,
                            embed_hidden_layers=args.embed_hidden_layers,
+                           embed_hidden_channels=args.embed_hidden_channels,
+                           embed_kernel_size=args.embed_kernel_size,
+                           embed_d_output=args.embed_d_output,
                            hidden_features=args.hidden_features,
-                           device=args.device, batch_size=args.batch_size)
+                           num_points=args.num_points,
+                           device=args.device,
+                           batch_size=args.batch_size)
     task.build_flow()
     flow = task.flow
 

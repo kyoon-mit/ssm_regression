@@ -66,10 +66,12 @@ class Fitting:
             from data_sho import damped_sho_np as func
             from data_sho import DataGenerator
             self.tag = 'sho'
+            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO'
         elif self.datatype=='SineGaussian':
             from data_sinegaussian import sine_gaussian_np as func
             from data_sinegaussian import DataGenerator
             self.tag = 'sg'
+            self.modeldir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG'
         elif self.datatype=='LIGO':
             self.tag = 'ligo'
             pass #TODO
@@ -79,8 +81,8 @@ class Fitting:
             raise ValueError(msg)
         self.func = func
         self.basedir = f'/ceph/submit/data/user/k/kyoon/KYoonStudy'
-        self.modeldir = os.path.join(self.basedir, 'models', self.datatype)
-        self.savedir = os.path.join(self.basedir, 'fitresults')
+        # self.modeldir = os.path.join(self.basedir, 'models', self.datatype)
+        self.savedir = os.path.join(self.basedir, 'fitresults', f'd{datasfx}')
         datafile = os.path.join(self.modeldir, f'test{datasfx}.pt')
         print(f'Opening {datafile}')
         self.test_dict = torch.load(datafile, map_location=self.device, weights_only=True)
