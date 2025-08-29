@@ -143,6 +143,9 @@ class NormalizingFlow():
             theta = augmented_theta.reshape(-1, 2) # (batch_size * num_repeat, 2)
             data = augmented_data.reshape(-1, 1, self.num_points) # (batch_size * num_repeat, 1, 500)
 
+            # print('theta', theta.shape)
+            # print('data', data.shape)
+
             flow_loss = - self.flow.log_prob(theta, context=data).mean()
 
             self.optimizer.zero_grad()
@@ -165,6 +168,7 @@ class NormalizingFlow():
         for idx, val in enumerate(self.val_data_loader, 1):
             _, augmented_theta, _, augmented_data, _ = val
             augmented_theta = augmented_theta[...,0:2]
+            augmented_theta = augmented_theta.repeat(1, self.num_repeats, 1) # TODO: temporary fix
 
             theta = augmented_theta.reshape(-1, 2)
             data = augmented_data.reshape(-1, 1, self.num_points)

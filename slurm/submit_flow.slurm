@@ -5,13 +5,13 @@
 #SBATCH --partition=submit-gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=10G
+#SBATCH --mem=16G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-1
+#SBATCH --array=0
 
 # List of your scripts
 SCRIPTS=(
-/ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sho_run_flow.sh
+# /ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sho_run_flow.sh
 /ceph/submit/data/user/k/kyoon/KYoonStudy/ssm_regression/slurm/bash_scripts/sg_run_flow.sh
 )
 
