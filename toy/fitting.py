@@ -5,8 +5,32 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Subset, DataLoader
+import bilby
+from bilby.core.prior import Uniform
+from bilby.core.likelihood import GaussianLikelihood
 
 logger = logging.getLogger('fitting')
+
+class PinkNoiseLikelihood(bilby.Likelihood):
+    def __init__(self, data_td, times, psd, fs, model):
+        super().__init__(parameters=dict())
+        self.data_td = data_td
+        self.times = times
+        self.fs = fs
+        self.N = len(times)
+        self.freqs = np.fft.rfftfreq(self.N, 1/fs)
+        self.data_fd = np.fft.rfft(data_td)
+        self.psd = psd
+        self.model = model
+
+    def log_likelihood(self):
+        model_td = self.model(self.parameters, self.times)
+        model_fd = np.fft.rfft(model_td)
+        resid_fd = self.data_fd - model_fd
+        # full Gaussian likelihood with PSD weighting
+        chi2 = np.sum((np.abs(resid_fd) ** 2) / self.psd)
+        logL = -0.5 * chi2
+        return logL
 
 class Fitting:
     """
@@ -23,6 +47,7 @@ class Fitting:
         num_points=200,
         t_vals_start=-1,
         t_vals_stop=10,
+        sigma=0.4
     ):
         """
         Parameters
@@ -45,6 +70,8 @@ class Fitting:
             Start value for the t values. Default is -1.
         t_vals_stop : int, optional
             Stop value for the t values. Default is 10.
+        sigma: None or int, optional
+            If None, uniform prior will be specified between 0 and 10. Default sigma=0.4.
 
         Raises
         ------
@@ -98,9 +125,23 @@ class Fitting:
         self.shift = default_shift
         self.num_points = num_points
         self.n_repeats = n_repeats
-        self.sigma = 0.4
-
-        self.t_vals_np = np.linspace(start=t_vals_start, stop=t_vals_stop, num=self.num_points)
+        self.sigma = sigma
+        self.t_vals_start, self.t_vals_stop = t_vals_start, t_vals_stop
+        self.t_vals_np = np.linspace(start=self.t_vals_start, stop=self.t_vals_stop, num=self.num_points)
+    
+    def sho_model(self, parameters, times):
+        from data_sho import damped_sho_np
+        return damped_sho_np(times,
+            omega_0=parameters['omega_0'],
+            beta=parameters['beta'],
+            shift=1)
+    
+    def sg_model(self, parameters, times):
+        from data_sinegaussian import sine_gaussian_np
+        return sine_gaussian_np(times,
+            f_0=parameters['f_0'],
+            tau=parameters['tau'],
+            shift=1)
 
     def summarize_bilby_event(self, result, truth, event_id):
         desc = result.posterior.describe(percentiles=[0.05, 0.25, 0.5, 0.75, 0.95])
@@ -175,6 +216,7 @@ class Fitting:
             params.add('tau', min=1., max=5.)
         elif self.datatype=='LIGO':
             pass # TODO: Implement LIGO model parameter hints
+        if not self.sigma: params.add('sigma', min=0.0, max=10.0)
         
         summaries = [] # Container for the event summary dataframes
         for idx, batch in enumerate(self.test_dataloader):
@@ -192,9 +234,6 @@ class Fitting:
         summary_df.to_parquet(os.path.join(self.savedir, f'lmfit_{self.tag}', f'{self.datatype}_lmfit_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
 
     def run_bilby(self, nlive=1000, sampler='bilby_mcmc', max_workers=4):
-        import bilby
-        from bilby.core.prior import Uniform
-        from bilby.core.likelihood import GaussianLikelihood
         priors = {}
         summaries = [] # Container for the event summary dataframes
         if self.datatype=='SHO':
@@ -205,6 +244,9 @@ class Fitting:
             priors['f_0'] = Uniform(0.1, 1.1, name='f_0', latex_label=r'$f_0$')
             priors['tau'] = Uniform(1., 5., name='tau', latex_label=r'$\tau$')
             injection_parameters = dict(f_0=0.6, tau=2.5)
+        if not self.sigma:
+            priors['sigma'] = Uniform(0.0, 10.0, name='sigma', latex_label=r'$sigma$')
+            injection_parameters['sigma'] = 0.4
         for idx, batch in enumerate(self.test_dataloader):
             theta_u, theta_s, data_u, data_s, event_id = batch
             event_id = event_id.item()
@@ -226,3 +268,54 @@ class Fitting:
             summaries.append(stats_df)
         summary_df = pd.concat(summaries)
         summary_df.to_parquet(os.path.join(self.savedir, f'{sampler}_{self.tag}', f'{self.datatype}_bilby_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
+
+    def run_bilby_psd(self, nlive=1000, sampler='bilby_mcmc', max_workers=4):
+        import bilby
+        from bilby.core.prior import Uniform
+        from bilby.core.likelihood import GaussianLikelihood
+        priors = {}
+        summaries = [] # Container for the event summary dataframes
+        if self.datatype=='SHO':
+            priors['omega_0'] = Uniform(0.1, 1.9, name='omega_0', latex_label=r'$\omega_0$')
+            priors['beta'] = Uniform(0, 0.5, name='beta', latex_label=r'$\beta$')
+            injection_parameters = dict(omega_0=1., beta=0.3)
+            from data_sho import damped_sho_np as _func
+            model = self.sho_model
+        elif self.datatype=='SineGaussian':
+            priors['f_0'] = Uniform(0.1, 1.1, name='f_0', latex_label=r'$f_0$')
+            priors['tau'] = Uniform(1., 5., name='tau', latex_label=r'$\tau$')
+            injection_parameters = dict(f_0=0.6, tau=2.5)
+            from data_sinegaussian import sine_gaussian_np as _func
+            model = self.sg_model
+        if not self.sigma:
+            priors['sigma'] = Uniform(0.0, 10.0, name='sigma', latex_label=r'$sigma$')
+            injection_parameters['sigma'] = 0.4
+        for idx, batch in enumerate(self.test_dataloader):
+            theta_u, theta_s, data_u, data_s, event_id = batch
+            event_id = event_id.item()
+            truth = theta_u[0][0].to(device='cpu')
+            truth_np = truth.numpy()
+            y = data_u[0][0].to(device='cpu')
+            y_np = y.numpy()
+            signal = _func(self.t_vals_np, *truth_np)
+            noise = y_np - signal
+            # Get PSD
+            N, fs = len(noise), self.num_points/(self.t_vals_stop - self.t_vals_start)
+            # freqs = np.fft.rfftfreq(N, 1/fs)
+            # fft_vals = np.fft.rfft(noise)
+            # psd = (2.0 / (fs * N)) * np.abs(fft_vals)**2
+            from scipy.signal import welch
+            freqs, psd = welch(noise, fs=fs, nperseg=min(len(noise), int(fs)), scaling='density', return_onesided=True)
+            log_l = PinkNoiseLikelihood(data_td=y_np, times=self.t_vals_np, psd=psd, fs=fs, model=model)
+            result = bilby.run_sampler(
+                likelihood=log_l, priors=priors, sampler=sampler,
+                nlive=nlive, npool=max_workers,
+                injection_parameters=injection_parameters,
+                outdir=os.path.join(self.savedir, f'{sampler}_{self.tag}_pink', f'{self.datatype}_id{event_id:05d}'),
+                label=f'{self.datatype}_id{event_id:05d}'
+            )
+            stats_df = self.summarize_bilby_event(result, truth_np, event_id)
+            logger.info(stats_df.head())
+            summaries.append(stats_df)
+        summary_df = pd.concat(summaries)
+        summary_df.to_parquet(os.path.join(self.savedir, f'{sampler}_{self.tag}_pink', f'{self.datatype}_bilby_id{self.start_idx:05d}-{self.end_idx:05d}.parquet'))
