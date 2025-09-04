@@ -26,27 +26,17 @@ class Plotter:
         print(f'Using device={self.device}')
 
         # Load datasets
-        if datatype == 'SineGaussian':
-            from data_sinegaussian import DataGenerator
-            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG'
-        elif datatype == 'SHO':
-            from data_sho import DataGenerator
-            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO'
-        elif datatype == 'LIGO':
-            pass  # TODO: Placeholder for LIGO data generator, implement as needed
-        else:
-            raise ValueError(f'Unknown datatype: {datatype}')
-        
         self.datatype = datatype
         self.datasfx = datasfx
 
-        self.test_dict  = torch.load(os.path.join(self.datadir, f'test{self.datasfx}.pt'), map_location=torch.device(self.device), weights_only=True)
-        self.test_data  = DataGenerator(self.test_dict)
-
-        self.test_data_loader = DataLoader(
-            self.test_data, batch_size=1, num_workers=4,
-            shuffle=False
-        )
+        if datatype == 'SineGaussian':
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG'
+        elif datatype == 'SHO':
+            self.datadir = '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO'
+        else:
+            raise ValueError(f'Unknown datatype: {datatype}')
+        
+        self.__loaddata__(os.path.join(self.datadir, f'test{self.datasfx}.pt'))
 
         self.save_path = save_path
         if not os.path.exists(self.save_path):
@@ -57,6 +47,23 @@ class Plotter:
         self.embedding_model = nn.Module()  # Placeholder for the model, replace with actual model loading
         self.flow_model = nn.Module()  # Placeholder for the flow model, replace with actual model loading
         self.ssm_model = nn.Module()
+
+    def __loaddata__(self, datapath):
+        # Load datasets
+        if self.datatype == 'SineGaussian':
+            from data_sinegaussian import DataGenerator
+        elif self.datatype == 'SHO':
+            from data_sho import DataGenerator
+        else:
+            raise ValueError(f'Unknown datatype: {self.datatype}')
+
+        self.test_dict  = torch.load(datapath, map_location=torch.device(self.device), weights_only=True)
+        self.test_data  = DataGenerator(self.test_dict)
+
+        self.test_data_loader = DataLoader(
+            self.test_data, batch_size=1, num_workers=4,
+            shuffle=False
+        )
 
     def __savefig__(self, plot, save_name):
         save_name = os.path.join(self.save_path, save_name)
@@ -519,7 +526,7 @@ class Plotter:
         else: raise ValueError(f"Unknown loss type: {self.loss}. Supported losses are 'NLLGaussian' and 'Quantile'.")
         return loss_fn
 
-    def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16,
+    def ssm_compute_vals(self, ssm_model, loss='NLLGaussian', batch_size=16, csv_fname='',
         compute_on_cpu=False, csv_output=False, save_prefix='ssm', timestamp=''):
         """
         Computes predictions and truths for the SSM model on the test data.
@@ -547,7 +554,8 @@ class Plotter:
         else:
             raise ValueError(f'Unknown loss function: {loss}')
 
-        csv_fname = f'{save_prefix}_{self.datatype}_{loss}{timestamp}_outputs.csv'
+        if not csv_fname:
+            csv_fname = f'{save_prefix}_{self.datatype}_{loss}{timestamp}_outputs.csv'
         csv_name = os.path.join(self.save_path, csv_fname)
         # Check if CSV file exists
         if os.path.exists(csv_name):
@@ -628,6 +636,7 @@ class Plotter:
             save_prefix='ssm',
             loss='NLLGaussian',
             csv_output=False,
+            csv_fname='',
             # Flow parameters
             plot_flow=False,
             num_points=200,
@@ -653,7 +662,7 @@ class Plotter:
         )
         self.ssm_model.eval()
 
-        ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=1000,
+        ssm_outputs = self.ssm_compute_vals(self.ssm_model, loss=loss, batch_size=1000, csv_fname=csv_fname,
             compute_on_cpu=False, csv_output=csv_output, save_prefix=save_prefix, timestamp=timestamp)
         
         if plot_flow:
@@ -680,7 +689,8 @@ class Plotter:
                 axis=1
             )
 
-        bilby_outputs = self.get_bilby_results(bilby_dir=f'/ceph/submit/data/user/k/kyoon/KYoonStudy/fitresults/d{self.datasfx}/bilby_mcmc')
+        # bilby_outputs = self.get_bilby_results(bilby_dir=f'/ceph/submit/data/user/k/kyoon/KYoonStudy/fitresults/d{self.datasfx}/bilby_mcmc')
+        bilby_outputs = self.get_bilby_results(bilby_dir=f'/ceph/submit/data/user/k/kyoon/KYoonStudy/fitresults/bilby_mcmc')
         bilby_omega_diffs, bilby_omega_z_scores = self.compute_z_scores(
             bilby_outputs['pred_omega'], bilby_outputs['pred_sigma_omega'], bilby_outputs['truth_omega']
         )
@@ -696,9 +706,9 @@ class Plotter:
             axis=1
         )
 
-        if loss=='Quantile':
-            ssm_outputs['pred_sigma1'] = (ssm_outputs['pred_q75_1'] - ssm_outputs['pred_q25_1']) / 2.
-            ssm_outputs['pred_sigma2'] = (ssm_outputs['pred_q75_2'] - ssm_outputs['pred_q25_2']) / 2.
+        # if loss=='Quantile':
+        #     ssm_outputs['pred_sigma1'] = (ssm_outputs['pred_q75_1'] - ssm_outputs['pred_q25_1']) / 2.
+        #     ssm_outputs['pred_sigma2'] = (ssm_outputs['pred_q75_2'] - ssm_outputs['pred_q25_2']) / 2.
 
         # Get differences between predictions and truths
         param1_diff, param1_z_score = self.compute_z_scores(ssm_outputs['pred_param1'], ssm_outputs['pred_sigma1'], ssm_outputs['truth_param1'])
@@ -723,18 +733,18 @@ class Plotter:
         labels_z_scores = [f'({labels_diffs[i]})/{labels_uncertainties[i]}' for i in range(len(labels_diffs))]
 
         # Plot uncertainties
-        figure_uncertainties = corner.corner(
-            uncertainties_stacked,
-            labels=labels_uncertainties,
-            quantiles=[0.16, 0.5, 0.84],
-            show_titles=True,
-            title_kwargs={"fontsize": 12},
-            label_kwargs={"fontsize": 12},
-            title_fmt='.2f',
-            color='C3'
-        )
-        figure_uncertainties.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
-        figure_uncertainties.subplots_adjust(top=0.87)
+        # figure_uncertainties = corner.corner(
+        #     uncertainties_stacked,
+        #     labels=labels_uncertainties,
+        #     quantiles=[0.16, 0.5, 0.84],
+        #     show_titles=True,
+        #     title_kwargs={"fontsize": 12},
+        #     label_kwargs={"fontsize": 12},
+        #     title_fmt='.2f',
+        #     color='C3'
+        # )
+        # figure_uncertainties.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        # figure_uncertainties.subplots_adjust(top=0.87)
 
         # Plot diffs
         figure_diffs = corner.corner(
@@ -779,7 +789,7 @@ class Plotter:
             range=[[-5, 5], [-5, 5]],
             verbose=False
         )
-        colors, labels = ['gray', 'green', 'red'], ['Bilby', 'LFI', f'SSM\n({loss})']
+        colors, labels = ['gray', 'green', 'red'], ['Bilby', 'LFI', f'S4D\n({loss})']
         counts = [
             np.sum((-5 < bilby_outputs['pred_omega']) & (bilby_outputs['pred_omega'] < 5)),
             torch.sum((-5 < flow_outputs['pred_omega']) & (flow_outputs['pred_omega'] < 5)).item() if plot_flow else 0,
@@ -845,7 +855,7 @@ class Plotter:
             if plot_flow:
                 if self.datatype=='SHO':
                     if i==0:
-                        ax.set_ylim(0, 1.05*ax.get_ylim()[1])
+                        ax.set_ylim(0, 1.10*ax.get_ylim()[1])
                     elif i==3:
                         ax.set_ylim(0, 1.00*ax.get_ylim()[1])
                 elif self.datatype=='SineGaussian':
@@ -871,9 +881,192 @@ class Plotter:
         if self.save_path is not None:
             self.__savefig__(figure_diffs, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_diffs.png')
             self.__savefig__(bilby_figure_diffs, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_bilby_diffs.png')
-            self.__savefig__(figure_uncertainties, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_uncertainties.png')
+            # self.__savefig__(figure_uncertainties, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_uncertainties.png')
             self.__savefig__(figure_z_scores, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_z_scores.png')
             self.__savefig__(figure_loss, f'{save_prefix}_{self.datatype}_{loss}{timestamp}_hist_loss_per_sample.png')
+        
+        plt.close()
+
+        print(f'Saved SSM predictions plots to {self.save_path}')
+        print(f'SSM predictions computed with loss={loss}')
+
+        return
+
+    def compare_ssm_predictions(
+            self,
+            d_model1,
+            n_layers1,
+            d_model2,
+            n_layers2,
+            data1_path='',
+            data2_path='',
+            model1_path='',
+            model2_path='',
+            save_prefix1='ssm1',
+            save_prefix2='ssm2',
+            loss='NLLGaussian',
+            csv_output=True,
+            csv_fname1='',
+            csv_fname2=''):
+        timestamp1 = extract_timestamp(model1_path, sep='_')
+        timestamp2 = extract_timestamp(model2_path, sep='_')
+        from models import S4Model
+        if loss=='NLLGaussian': d_output = 4
+        elif loss=='Quantile': d_output = 6
+        else: raise ValueError(f'Unknown loss function: {loss}')
+        if not os.path.exists(model1_path):
+            raise ValueError(f"Model path '{model1_path}' does not exist or was not provided.")
+        if not os.path.exists(model2_path):
+            raise ValueError(f"Model path '{model2_path}' does not exist or was not provided.")
+        ssm_model1 = S4Model(d_input=1, d_output=d_output, d_model=d_model1,
+            loss=loss, n_layers=n_layers1, dropout=0.0, prenorm=False)
+        ssm_model2 = S4Model(d_input=1, d_output=d_output, d_model=d_model2,
+            loss=loss, n_layers=n_layers2, dropout=0.0, prenorm=False)
+        ssm_model1 = ssm_model1.to(self.device)
+        ssm_model2 = ssm_model2.to(self.device)
+        ssm_model1.load_state_dict(
+            torch.load(model1_path, map_location=self.device, weights_only=True))
+        ssm_model2.load_state_dict(
+            torch.load(model2_path, map_location=self.device, weights_only=True))
+        ssm_model1.eval()
+        ssm_model2.eval()
+
+        self.__loaddata__(data1_path)
+        ssm_outputs1 = self.ssm_compute_vals(ssm_model1, loss=loss, batch_size=1000, csv_fname=csv_fname1,
+            compute_on_cpu=False, csv_output=csv_output, save_prefix=save_prefix1, timestamp=timestamp1)
+        self.__loaddata__(data2_path)
+        ssm_outputs2 = self.ssm_compute_vals(ssm_model2, loss=loss, batch_size=1000, csv_fname=csv_fname2,
+            compute_on_cpu=False, csv_output=csv_output, save_prefix=save_prefix2, timestamp=timestamp2)
+        
+        ssm1_param1_diff, ssm1_param1_z_score = self.compute_z_scores(ssm_outputs1['pred_param1'], ssm_outputs1['pred_sigma1'], ssm_outputs1['truth_param1'])
+        ssm1_param2_diff, ssm1_param2_z_score = self.compute_z_scores(ssm_outputs1['pred_param2'], ssm_outputs1['pred_sigma2'], ssm_outputs1['truth_param2'])
+        ssm2_param1_diff, ssm2_param1_z_score = self.compute_z_scores(ssm_outputs2['pred_param1'], ssm_outputs2['pred_sigma1'], ssm_outputs2['truth_param1'])
+        ssm2_param2_diff, ssm2_param2_z_score = self.compute_z_scores(ssm_outputs2['pred_param2'], ssm_outputs2['pred_sigma2'], ssm_outputs2['truth_param2'])
+
+        # Stack into (N, 2) array
+        ssm1_diffs_stacked, ssm1_z_scores_stacked, ssm1_uncertainties_stacked =\
+            np.stack([ssm1_param1_diff.numpy(), ssm1_param2_diff.numpy()], axis=1),\
+            np.stack([ssm1_param1_z_score.numpy(), ssm1_param2_z_score.numpy()],axis=1),\
+            np.stack([ssm_outputs1['pred_sigma1'].numpy(), ssm_outputs1['pred_sigma2'].numpy()],axis=1)
+        ssm2_diffs_stacked, ssm2_z_scores_stacked, ssm2_uncertainties_stacked =\
+            np.stack([ssm2_param1_diff.numpy(), ssm2_param2_diff.numpy()], axis=1),\
+            np.stack([ssm2_param1_z_score.numpy(), ssm2_param2_z_score.numpy()],axis=1),\
+            np.stack([ssm_outputs2['pred_sigma1'].numpy(), ssm_outputs2['pred_sigma2'].numpy()],axis=1)
+
+        # Prepare labels for the plots
+        if self.datatype == 'SHO':
+            labels_diffs = [r'$\hat{\omega}_0 - \omega_0$', r'$\hat{\beta} - \beta$']
+            labels_uncertainties = [r'$\hat{\sigma}_{\omega_0}$', r'$\hat{\sigma}_{\beta}$']
+        elif self.datatype == 'SineGaussian':
+            labels_diffs = [r'$\hat{f}_0 - f_0$', r'$\hat{\tau} - \tau$']
+            labels_uncertainties = [r'$\hat{\sigma}_{f_0}$', r'$\hat{\sigma}_{\tau}$']
+        labels_z_scores = [f'({labels_diffs[i]})/{labels_uncertainties[i]}' for i in range(len(labels_diffs))]
+
+        # Plot uncertainties
+        figure_uncertainties = corner.corner(
+            ssm1_uncertainties_stacked,
+            labels=labels_uncertainties,
+            quantiles=[0.16, 0.5, 0.84],
+            show_titles=True,
+            title_kwargs={"fontsize": 12},
+            label_kwargs={"fontsize": 12},
+            title_fmt='.2f',
+            color='blue'
+        )
+        corner.corner(
+            ssm2_uncertainties_stacked,
+            fig=figure_uncertainties,
+            title_fmt='.2f',
+            color='purple'
+        )
+        plt.legend(
+            handles=[
+                mlines.Line2D([], [], color='blue', label=save_prefix1),
+                mlines.Line2D([], [], color='purple', label=save_prefix2),
+            ],
+            fontsize=14, frameon=False,
+            bbox_to_anchor=(1.1, 2.2), loc="upper right"
+        )
+        figure_uncertainties.suptitle(f'Data: {self.datatype}, Loss: {loss}', fontsize=12)
+        figure_uncertainties.subplots_adjust(top=0.87)
+
+        corner_kwargs = dict(
+            smooth=0.8,
+            label_kwargs=dict(fontsize=14),
+            labelpad=-0.13,
+            title_kwargs=dict(fontsize=14),
+            tick_params=dict(labelsize=14),
+            # quantiles=[0.1587, 0.5, 0.8413],
+            levels=(1 - np.exp(-0.5), 1 - np.exp(-2), 1 - np.exp(-9 / 2.)), # 1, 2, 3 sigmas
+            # levels=(0.1587, 0.5, 0.8413),
+            plot_density=True,
+            plot_datapoints=False,
+            fill_contours=False,
+            show_titles=False,
+            title_fmt='.2f',
+            max_n_ticks=3,
+            verbose=False
+        )
+
+        # Plot z_scores
+        figure_z_scores = corner.corner(
+            ssm1_z_scores_stacked,
+            labels=labels_z_scores,
+            color='blue',
+            range=[[-5, 5], [-5, 5]],
+            **corner_kwargs
+        )
+        corner.corner(
+            ssm2_z_scores_stacked,
+            fig=figure_z_scores,
+            labels=labels_z_scores,
+            color='purple',
+            range=[[-5, 5], [-5, 5]],
+            **corner_kwargs
+        )
+        figure_z_scores.suptitle(f'{self.datatype}', fontsize=14)
+        figure_z_scores.subplots_adjust(top=0.87)
+        plt.legend(
+            handles=[
+                mlines.Line2D([], [], color='blue', label=save_prefix1),
+                mlines.Line2D([], [], color='purple', label=save_prefix2),
+            ],
+            fontsize=14, frameon=False,
+            bbox_to_anchor=(1.1, 2.2), loc="upper right"
+        )
+
+        # Plot diffs
+        figure_diffs = corner.corner(
+            ssm2_diffs_stacked,
+            labels=labels_diffs,
+            color='purple',
+            range=[[-1, 1], [-1, 1]],
+            **corner_kwargs
+        )
+        corner.corner(
+            ssm1_diffs_stacked,
+            labels=labels_diffs,
+            fig=figure_diffs,
+            color='blue',
+            range=[[-1, 1], [-1, 1]],
+            **corner_kwargs
+        )
+        figure_diffs.suptitle(f'{self.datatype}', fontsize=14)
+        figure_diffs.subplots_adjust(top=0.87)
+        plt.legend(
+            handles=[
+                mlines.Line2D([], [], color='blue', label=save_prefix1),
+                mlines.Line2D([], [], color='purple', label=save_prefix2),
+            ],
+            fontsize=14, frameon=False,
+            bbox_to_anchor=(1.1, 2.2), loc="upper right"
+        )
+
+        # Save the figures
+        if self.save_path is not None:
+            self.__savefig__(figure_uncertainties, f'{save_prefix1}_{save_prefix2}_{self.datatype}_{loss}_uncertainties.png')
+            self.__savefig__(figure_z_scores, f'{save_prefix1}_{save_prefix2}_{self.datatype}_{loss}_z_scores.png')
+            self.__savefig__(figure_diffs, f'{save_prefix1}_{save_prefix2}_{self.datatype}_{loss}_diffs.png')
         
         plt.close()
 
@@ -948,7 +1141,7 @@ if __name__ == "__main__":
         'num_points': 500
     }
     sho_ssm_nllgaussian_params = {
-        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/DHO/model.SSM.SHO.NLLGaussian.250827165455.path',
+        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/DHO/model.SSM.SHO.NLLGaussian.250827165455.pink.noise.sigma0.4.pt',
         'd_model': 6,
         'n_layers': 4,
         'save_prefix': 'ssm_d6_n4',
@@ -957,7 +1150,7 @@ if __name__ == "__main__":
         'plot_flow': True
     }
     sho_ssm_quantile_params = {
-        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.Quantile.250801100654.path',
+        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/DHO/model.SSM.SHO.Quantile.250828225103.pink.noise.sigma0.4.pt',
         'd_model': 6,
         'n_layers': 4,
         'save_prefix': 'ssm_d6_n4',
@@ -966,7 +1159,7 @@ if __name__ == "__main__":
         'plot_flow': True
     }
     sg_ssm_nllgaussian_params = {
-        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250801142022.path',
+        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/SG/model.SSM.SineGaussian.NLLGaussian.250828213816.pink.noise.sigma0.4.pt',
         'd_model': 6,
         'n_layers': 4,
         'save_prefix': 'ssm_d6_n4',
@@ -975,7 +1168,7 @@ if __name__ == "__main__":
         'plot_flow': True
     }
     sg_ssm_quantile_params = {
-        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.Quantile.250801101817.path',
+        'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/SG/model.SSM.SineGaussian.Quantile.250828225108.pink.noise.sigma0.4.pt',
         'd_model': 6,
         'n_layers': 4,
         'save_prefix': 'ssm_d6_n4',
@@ -983,20 +1176,78 @@ if __name__ == "__main__":
         'csv_output': True,
         'plot_flow': True
     }
+    # sho_flow_params = {
+    #     'embed_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250804212612.pt',
+    #     'flow_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/flow.CNN.SHO.embed250804212612.250805000316.pt',
+    #     'flow_hidden_features': 30,
+    #     'embed_hidden_layers': 2,
+    #     'embed_hidden_channels': 20,
+    #     'embed_kernel_size': 21,
+    #     'embed_d_output': 6,
+    #     'num_points': 200
+    # }
+    # sg_flow_params = {
+    #     'embed_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250804212612.pt',
+    #     'flow_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/flow.CNN.SineGaussian.embed250804212612.250805000316.pt',
+    #     'flow_hidden_features': 20,
+    #     'embed_hidden_layers': 2,
+    #     'embed_hidden_channels': 10,
+    #     'embed_kernel_size': 11,
+    #     'embed_d_output': 12,
+    #     'num_points': 500
+    # }
+    # sho_ssm_nllgaussian_params = {
+    #     'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250801140434.path',
+    #     'csv_fname': '/ceph/submit/data/user/k/kyoon/KYoonStudy/plots/s4d_SHO_NLLGaussian_Benedict.csv',
+    #     'd_model': 6,
+    #     'n_layers': 4,
+    #     'save_prefix': 'ssm_d6_n4',
+    #     'loss': 'NLLGaussian',
+    #     'csv_output': True,
+    #     'plot_flow': True
+    # }
+    # sho_ssm_quantile_params = {
+    #     'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.Quantile.250801100654.path',
+    #     'csv_fname': '/ceph/submit/data/user/k/kyoon/KYoonStudy/plots/s4d_SHO_Quantile_Benedict.csv',
+    #     'd_model': 6,
+    #     'n_layers': 4,
+    #     'save_prefix': 'ssm_d6_n4',
+    #     'loss': 'Quantile',
+    #     'csv_output': True,
+    #     'plot_flow': True
+    # }
+    # sg_ssm_nllgaussian_params = {
+    #     'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250801142022.path',
+    #     'd_model': 6,
+    #     'n_layers': 4,
+    #     'save_prefix': 'ssm_d6_n4',
+    #     'loss': 'NLLGaussian',
+    #     'csv_output': True,
+    #     'plot_flow': True
+    # }
+    # sg_ssm_quantile_params = {
+    #     'model_path': '/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.Quantile.250801101817.path',
+    #     'd_model': 6,
+    #     'n_layers': 4,
+    #     'save_prefix': 'ssm_d6_n4',
+    #     'loss': 'Quantile',
+    #     'csv_output': True,
+    #     'plot_flow': True
+    # }
     
-    plotter = Plotter(datatype='SHO', datasfx='_dho_gaussian_pink_sigma0.4')
+    # plotter = Plotter(datatype='SHO', datasfx='_dho_gaussian_pink_sigma0.4')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250720075718.pt',
     #                         num_hidden_layers_h=2)
     # plotter.plot_flow(**sho_flow_params)
-    plotter.plot_ssm_predictions(**sho_ssm_nllgaussian_params, **sho_flow_params)
-    plotter.plot_ssm_predictions(**sho_ssm_quantile_params, **sho_flow_params)
+    # plotter.plot_ssm_predictions(**sho_ssm_nllgaussian_params, **sho_flow_params)
+    # plotter.plot_ssm_predictions(**sho_ssm_quantile_params, **sho_flow_params)
 
-    plotter = Plotter(datatype='SineGaussian', datasfx='_sg_gaussian_pink_sigma0.4')
+    # plotter = Plotter(datatype='SineGaussian', datasfx='_sg_gaussian_pink_sigma0.4')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/embedding.CNN.SHO.250720075718.pt',
     #                         num_hidden_layers_h=2)
     # plotter.plot_flow(**sho_flow_params)
-    plotter.plot_ssm_predictions(**sg_ssm_nllgaussian_params, **sg_flow_params)
-    plotter.plot_ssm_predictions(**sg_ssm_quantile_params, **sg_flow_params)
+    # plotter.plot_ssm_predictions(**sg_ssm_nllgaussian_params, **sg_flow_params)
+    # plotter.plot_ssm_predictions(**sg_ssm_quantile_params, **sg_flow_params)
     
     # plotter = Plotter(datatype='SineGaussian', datasfx='_sigma0.4_gaussian')
     # plotter.plot_embeddings(model_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/embedding.CNN.SineGaussian.250720075718.pt',
@@ -1004,3 +1255,26 @@ if __name__ == "__main__":
     # plotter.plot_flow(**sg_flow_params)
     # plotter.plot_ssm_predictions(**sg_ssm_nllgaussian_params, **sg_flow_params)
     # plotter.plot_ssm_predictions(**sg_ssm_quantile_params, **sg_flow_params)
+
+    plotter = Plotter(datatype='SHO', datasfx='_dho_gaussian_pink_sigma0.4')
+    plotter.compare_ssm_predictions(
+        d_model1=6, d_model2=6, n_layers1=4, n_layers2=4,
+        data1_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO/test_dho_gaussian_smear_sigma0.4.pt',
+        # data2_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO/test_dho_gaussian_smear_sigma0.4.pt',
+        data2_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/DHO/test_dho_gaussian_pink_sigma0.4.pt',
+        model1_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SHO/output/model.SSM.SHO.NLLGaussian.250801140434.path',
+        model2_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/DHO/model.SSM.SHO.NLLGaussian.250827165455.pink.noise.sigma0.4.pt',
+        save_prefix1='white_noise',
+        save_prefix2='pink_noise'
+    )
+    plotter = Plotter(datatype='SineGaussian', datasfx='_sg_gaussian_pink_sigma0.4')
+    plotter.compare_ssm_predictions(
+        d_model1=6, d_model2=6, n_layers1=4, n_layers2=4,
+        data1_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG/test_sg_gaussian_smear_sigma0.4.pt',
+        # data2_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG/test_sg_gaussian_smear_sigma0.4.pt',
+        data2_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/data/SG/test_sg_gaussian_pink_sigma0.4.pt',
+        model1_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/models/SineGaussian/output/model.SSM.SineGaussian.NLLGaussian.250801142022.path',
+        model2_path='/ceph/submit/data/user/k/kyoon/KYoonStudy/neurips2025/saved_models/SG/model.SSM.SineGaussian.NLLGaussian.250828213816.pink.noise.sigma0.4.pt',
+        save_prefix1='white_noise',
+        save_prefix2='pink_noise'
+    )
