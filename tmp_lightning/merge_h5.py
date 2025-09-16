@@ -2,8 +2,8 @@ import h5py
 import glob
 import numpy as np
 
-input_files = sorted(glob.glob('/n/holystore01/LABS/iaifi_lab/Lab/kyoon/models/BNS/sig_*.h5'))
-output_file = '/n/holystore01/LABS/iaifi_lab/Lab/kyoon/models/BNS/bns_new_waveforms.h5'
+input_files = sorted(glob.glob('/n/holystore01/LABS/iaifi_lab/Lab/kyoon/models/bns/sig_*.h5'))
+output_file = '/n/holystore01/LABS/iaifi_lab/Lab/kyoon/ssm_regression/tmp_lightning/bns_new_waveforms.h5'
 
 # Open first file to get structure
 with h5py.File(input_files[0], 'r') as f0:

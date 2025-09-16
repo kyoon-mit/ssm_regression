@@ -11,6 +11,7 @@ class LitS4Model(LightningModule):
         self,
         d_input,
         d_output,
+        variables,
         d_model=256,
         n_layers=4,
         loss='NLLGaussian',
@@ -47,7 +48,7 @@ class LitS4Model(LightningModule):
         h1, l1, params, idx = batch
         device = h1.device
         inputs = torch.stack([h1.to(device), l1.to(device)], dim=2)
-        targets = torch.stack(list(params.values()), dim=1)
+        targets = torch.stack([params[v] for v in self.hparams.variables], dim=1)
         outputs = self.forward(inputs)
         loss = 1e3
         if self.hparams.loss=='NLLGaussian':

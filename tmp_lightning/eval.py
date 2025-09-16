@@ -53,37 +53,40 @@ def compute_vals(checkpoint_path, config_path, csv_name, compute_on_cpu=False):
         h1, l1, params, idx = batch
         device = h1.device
         inputs = torch.stack([h1.to(device), l1.to(device)], dim=2)
-        truths = torch.stack(list(params.values()), dim=1)
+        truths = torch.stack([params[v] for v in variables], dim=1)
+        print(params)
+        print(truths)
+    return
 
-        with torch.no_grad():
-            preds = model(inputs)
+    #     with torch.no_grad():
+    #         preds = model(inputs)
 
-        # Move samples to CPU if required
-        if compute_on_cpu:
-            preds = preds.cpu()
-            truths = truths.cpu()
+    #     # Move samples to CPU if required
+    #     if compute_on_cpu:
+    #         preds = preds.cpu()
+    #         truths = truths.cpu()
         
-        for i in range(len(variables)):
-            p = variables[i]
-            pred_dict[f'pred_{p}'].extend(preds[:, i].tolist())
-            truth_dict[f'truth_{p}'].extend(truths[:, i].tolist())
-            # TODO: implement for other losses
-            pred_sigma_dict[f'sigma_{p}'].extend(preds[:, i+len(variables)].tolist())
+    #     for i in range(len(variables)):
+    #         p = variables[i]
+    #         pred_dict[f'pred_{p}'].extend(preds[:, i].tolist())
+    #         truth_dict[f'truth_{p}'].extend(truths[:, i].tolist())
+    #         # TODO: implement for other losses
+    #         pred_sigma_dict[f'sigma_{p}'].extend(preds[:, i+len(variables)].tolist())
 
-        return_dict.update(maketensor(pred_dict))
-        return_dict.update(maketensor(truth_dict))
-        # TODO: implement for other losses
-        return_dict.update(makesqrttensor(pred_sigma_dict))
-        dump_to_csv(return_dict, csv_name=csv_name)
+    # return_dict.update(maketensor(pred_dict))
+    # return_dict.update(maketensor(truth_dict))
+    # # TODO: implement for other losses
+    # return_dict.update(makesqrttensor(pred_sigma_dict))
+    # dump_to_csv(return_dict, csv_name=csv_name)
 
-        return return_dict
+    # return return_dict
     
 def main():
     base_path = Path('/n/holystore01/LABS/iaifi_lab/Lab/kyoon/ssm_regression/tmp_lightning')
-    checkpoint_path = base_path / 'lightning_logs/c3p6di6k/checkpoints/ckpt_epoch=18-step=0969.ckpt'
+    checkpoint_path = base_path / 'lightning_logs/c3rq5ww8/checkpoints/ckpt_epoch=191-step=96768.ckpt'
     config_path = base_path / 'config.yaml'
-    csv_path = base_path / 'bns_outputs.csv'
-    results = compute_vals(checkpoint_path, config_path, csv_path, compute_on_cpu='True')
+    csv_path = base_path / 'bns_o8_d64_n32_nllgaussian_outputs.csv'
+    results = compute_vals(checkpoint_path, config_path, csv_path, compute_on_cpu=False)
     return
 
 if __name__ == '__main__':

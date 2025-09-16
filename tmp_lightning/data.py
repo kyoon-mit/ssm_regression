@@ -32,13 +32,12 @@ class BNSDataset(Dataset):
             # self.waveforms_h1 = self.h5file['waveforms/h1']
             # self.waveforms_l1 = self.h5file['waveforms/l1']
         self.data = self.h5file['data']
-            # self.param_group = self.h5file['parameters']
+            # self.param_data_from_file = self.h5file['parameters']
             # self.length = self.waveforms_h1.shape[0]
         self.length = self.data.shape[0]
         self.keys = set(variables) & (self.valid_keys | self.derived_keys)
         if not self.keys:
             raise ValueError(f'Valid variables are: {self.valid_keys}.')
-        self.param_group = {k: self.h5file[k] for k in self.keys}
         self.downsample_factor, self.duration = int(downsample_factor), duration
         self.scale_factor = scale_factor
         self.normalize = normalize
@@ -50,29 +49,25 @@ class BNSDataset(Dataset):
         """
         params = {}
 
-        # load masses from file if available (safe access)
-        if 'mass_1' in self.param_group and 'mass_2' in self.param_group:
-            m1 = torch.tensor(self.param_group['mass_1'][idx], dtype=torch.float32)
-            m2 = torch.tensor(self.param_group['mass_2'][idx], dtype=torch.float32)
-        else:
-            raise KeyError('mass_1 and mass_2 must be present in the HDF5 to compute derived parameters.')
 
         # compute derived only if requested
         # if 'chirp_mass' in self.keys:
         #     params['chirp_mass'] = (m1 * m2)**(3/5) / (m1 + m2)**(1/5)
         # if 'mass_ratio' in self.keys:
         #     params['mass_ratio'] = m2 / m1
-        if 'total_mass' in self.keys:
-            params['total_mass'] = m1 + m2
+        if {'total_mass', 'chirp_mass', 'mass_ratio'} & self.keys:
+            # load masses from file if available (safe access)
+            m1 = torch.tensor(self.h5file['mass_1'][idx], dtype=torch.float16)
+            m2 = torch.tensor(self.h5file['mass_2'][idx], dtype=torch.float16)
+            # params['total_mass'] = m1 + m2 # <-- ?
 
         # add any other requested scalar parameters that exist
         for k in (self.keys - self.derived_keys):
-            if k in self.param_group:
-                params[k] = torch.tensor(self.param_group[k][idx], dtype=torch.float32)
-            elif k == 'redshift' and 'distance' in self.h5file:
+            if k == 'redshift' and 'distance' in self.h5file:
                 # if user asked for redshift but file has distance, map if appropriate
-                params['redshift'] = torch.tensor(self.h5file['distance'][idx], dtype=torch.float32)
-
+                params['redshift'] = torch.tensor(self.h5file['distance'][idx], dtype=torch.float16)
+            else:
+                params[k] = torch.tensor(self.h5file[k][idx], dtype=torch.float16)
         return params
 
     def __len__(self):
@@ -82,8 +77,8 @@ class BNSDataset(Dataset):
         # Load waveforms
         # h1 = self.scale_factor * torch.tensor(self.waveforms_h1[idx][::self.downsample_factor], dtype=torch.float32)
         # l1 = self.scale_factor * torch.tensor(self.waveforms_l1[idx][::self.downsample_factor], dtype=torch.float32)
-        h1 = self.scale_factor * torch.tensor(self.data[idx][0][::self.downsample_factor], dtype=torch.float32)
-        l1 = self.scale_factor * torch.tensor(self.data[idx][1][::self.downsample_factor], dtype=torch.float32)
+        h1 = self.scale_factor * torch.tensor(self.data[idx][0][::self.downsample_factor], dtype=torch.float16)
+        l1 = self.scale_factor * torch.tensor(self.data[idx][1][::self.downsample_factor], dtype=torch.float16)
 
         start_idx = int(-self.duration * (self.sample_rate // self.downsample_factor))
         h1 = h1[start_idx:]
