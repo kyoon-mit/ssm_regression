@@ -9,7 +9,8 @@ class BNSDataset(Dataset):
         hdf5_path,
         variables, # set of variables
         downsample_factor=1,
-        duration=4,
+        start_time=0,
+        end_time=64,
         scale_factor=1.,
         normalize=False
     ):
@@ -38,7 +39,8 @@ class BNSDataset(Dataset):
         self.keys = set(variables) & (self.valid_keys | self.derived_keys)
         if not self.keys:
             raise ValueError(f'Valid variables are: {self.valid_keys}.')
-        self.downsample_factor, self.duration = int(downsample_factor), duration
+        self.downsample_factor = int(downsample_factor)
+        self.start_time, self.end_time = start_time, end_time
         self.scale_factor = scale_factor
         self.normalize = normalize
 
@@ -57,17 +59,17 @@ class BNSDataset(Dataset):
         #     params['mass_ratio'] = m2 / m1
         if {'total_mass', 'chirp_mass', 'mass_ratio'} & self.keys:
             # load masses from file if available (safe access)
-            m1 = torch.tensor(self.h5file['mass_1'][idx], dtype=torch.float16)
-            m2 = torch.tensor(self.h5file['mass_2'][idx], dtype=torch.float16)
+            m1 = torch.tensor(self.h5file['mass_1'][idx], dtype=torch.float32)
+            m2 = torch.tensor(self.h5file['mass_2'][idx], dtype=torch.float32)
             # params['total_mass'] = m1 + m2 # <-- ?
 
         # add any other requested scalar parameters that exist
         for k in (self.keys - self.derived_keys):
             if k == 'redshift' and 'distance' in self.h5file:
                 # if user asked for redshift but file has distance, map if appropriate
-                params['redshift'] = torch.tensor(self.h5file['distance'][idx], dtype=torch.float16)
+                params['redshift'] = torch.tensor(self.h5file['distance'][idx], dtype=torch.float32)
             else:
-                params[k] = torch.tensor(self.h5file[k][idx], dtype=torch.float16)
+                params[k] = torch.tensor(self.h5file[k][idx], dtype=torch.float32)
         return params
 
     def __len__(self):
@@ -77,12 +79,11 @@ class BNSDataset(Dataset):
         # Load waveforms
         # h1 = self.scale_factor * torch.tensor(self.waveforms_h1[idx][::self.downsample_factor], dtype=torch.float32)
         # l1 = self.scale_factor * torch.tensor(self.waveforms_l1[idx][::self.downsample_factor], dtype=torch.float32)
-        h1 = self.scale_factor * torch.tensor(self.data[idx][0][::self.downsample_factor], dtype=torch.float16)
-        l1 = self.scale_factor * torch.tensor(self.data[idx][1][::self.downsample_factor], dtype=torch.float16)
+        start_idx = int(self.start_time * self.sample_rate)
+        end_idx = int(self.end_time * self.sample_rate)
 
-        start_idx = int(-self.duration * (self.sample_rate // self.downsample_factor))
-        h1 = h1[start_idx:]
-        l1 = l1[start_idx:]
+        h1 = self.scale_factor * torch.tensor(self.data[idx][0][start_idx:end_idx:self.downsample_factor], dtype=torch.float32)
+        l1 = self.scale_factor * torch.tensor(self.data[idx][1][start_idx:end_idx:self.downsample_factor], dtype=torch.float32)
 
         if self.normalize:
             h1 = (h1 - h1.mean()) / (h1.std())
@@ -97,7 +98,8 @@ class LitBNSDataModule(L.LightningDataModule):
         hdf5_path,
         variables, # set of variables to include in the dataset
         downsample_factor=1,
-        duration=64,
+        start_time=0,
+        end_time=64,
         scale_factor=1.,
         normalize=False,
         train_batch_size=1000, val_batch_size=1000, test_batch_size=1000,
@@ -106,10 +108,12 @@ class LitBNSDataModule(L.LightningDataModule):
         random_seed=42
     ):
         super().__init__()
+        self.save_hyperparameters()
         self.hdf5_path = hdf5_path
         self.variables = variables
         self.downsample_factor = downsample_factor
-        self.duration = duration
+        self.start_time = start_time
+        self.end_time = end_time
         self.scale_factor = scale_factor
         self.normalize = normalize
         self.train_batch_size = train_batch_size
@@ -124,8 +128,10 @@ class LitBNSDataModule(L.LightningDataModule):
         if hasattr(self, 'dataset'):
             # already prepared
             return
-        self.dataset = BNSDataset(self.hdf5_path, variables=self.variables, downsample_factor=self.downsample_factor,
-        normalize=self.normalize, duration=self.duration, scale_factor=self.scale_factor)
+        self.dataset = BNSDataset(self.hdf5_path, variables=self.variables,
+                                  downsample_factor=self.downsample_factor,
+                                  start_time=self.start_time, end_time=self.end_time,
+                                  normalize=self.normalize, scale_factor=self.scale_factor)
         if self.split_indices_file:
             if not self.split_indices_file.endswith('.npz'):
                 raise ValueError("split_indices_file must be a .npz file containing precomputed indices.")

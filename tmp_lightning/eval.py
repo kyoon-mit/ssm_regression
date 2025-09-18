@@ -49,46 +49,54 @@ def compute_vals(checkpoint_path, config_path, csv_name, compute_on_cpu=False):
     pred_dict, truth_dict, pred_sigma_dict, return_dict =\
         dinit('pred', variables), dinit('truth', variables), dinit('sigma', variables), dict()
 
+    it = 0
     for batch in test_data_loader:
+        if it > 0: break
         h1, l1, params, idx = batch
+        print('Batch iteration:', it)
         device = h1.device
         inputs = torch.stack([h1.to(device), l1.to(device)], dim=2)
         truths = torch.stack([params[v] for v in variables], dim=1)
-        print(params)
-        print(truths)
-    return
 
-    #     with torch.no_grad():
-    #         preds = model(inputs)
+        with torch.no_grad():
+            preds = model(inputs)
 
-    #     # Move samples to CPU if required
-    #     if compute_on_cpu:
-    #         preds = preds.cpu()
-    #         truths = truths.cpu()
+        # Move samples to CPU if required
+        if compute_on_cpu:
+            preds = preds.cpu()
+            truths = truths.cpu()
         
-    #     for i in range(len(variables)):
-    #         p = variables[i]
-    #         pred_dict[f'pred_{p}'].extend(preds[:, i].tolist())
-    #         truth_dict[f'truth_{p}'].extend(truths[:, i].tolist())
-    #         # TODO: implement for other losses
-    #         pred_sigma_dict[f'sigma_{p}'].extend(preds[:, i+len(variables)].tolist())
+        for i in range(len(variables)):
+            p = variables[i]
+            pred_dict[f'pred_{p}'].extend(preds[:, i].tolist())
+            truth_dict[f'truth_{p}'].extend(truths[:, i].tolist())
+            # TODO: implement for other losses
+            pred_sigma_dict[f'sigma_{p}'].extend(preds[:, i+len(variables)].tolist())
+        it += 1
 
-    # return_dict.update(maketensor(pred_dict))
-    # return_dict.update(maketensor(truth_dict))
-    # # TODO: implement for other losses
-    # return_dict.update(makesqrttensor(pred_sigma_dict))
-    # dump_to_csv(return_dict, csv_name=csv_name)
+    return_dict.update(maketensor(pred_dict))
+    return_dict.update(maketensor(truth_dict))
+    # TODO: implement for other losses
+    return_dict.update(makesqrttensor(pred_sigma_dict))
+    dump_to_csv(return_dict, csv_name=csv_name)
 
-    # return return_dict
-    
+    return variables
+
+def plotter(variables, csv_path):
+    for var in variables:
+        continue
+    pass
+
+def trainer_callback(checkpoint_path, config_path, csv_path):
+    variables = compute_vals(checkpoint_path, config_path, csv_path, compute_on_cpu=False)
+
 def main():
     base_path = Path('/n/holystore01/LABS/iaifi_lab/Lab/kyoon/ssm_regression/tmp_lightning')
-    checkpoint_path = base_path / 'lightning_logs/c3rq5ww8/checkpoints/ckpt_epoch=191-step=96768.ckpt'
-    config_path = base_path / 'config.yaml'
-    csv_path = base_path / 'bns_o8_d64_n32_nllgaussian_outputs.csv'
-    results = compute_vals(checkpoint_path, config_path, csv_path, compute_on_cpu=False)
+    checkpoint_path = '/n/holystore01/LABS/iaifi_lab/Lab/kyoon/ssm_regression/tmp_lightning/lightning_logs/d16qhixu/checkpoints/ckpt_epoch=19.ckpt'
+    config_path = base_path / 'config_2vars.yaml'
+    csv_path = base_path / 'bns_o8_d64_n32_nllgaussian_2vars_outputs.csv'
+    variables = compute_vals(checkpoint_path, config_path, csv_path, compute_on_cpu=False)
     return
 
 if __name__ == '__main__':
     main()
-

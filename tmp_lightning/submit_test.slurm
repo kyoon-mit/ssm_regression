@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --partition=gpu_h200
 #SBATCH --time=48:00:00
-#SBATCH --job-name=bns
+#SBATCH --job-name=bns_2vars
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=30G
@@ -18,5 +18,8 @@ echo "Using config file: $1"
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+CONFIG_NAME=$(basename "$1" .yaml)
+MY_LOG_NAME="bns_${CONFIG_NAME}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID}"
+
 cd ${TOP_DIR}/tmp_lightning
-python cli.py fit --config "$1"
+python cli.py fit --config "$1" --trainer.logger.init_args.id="${MY_LOG_NAME}"
