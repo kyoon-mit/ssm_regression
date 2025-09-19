@@ -51,7 +51,6 @@ class BNSDataset(Dataset):
         """
         params = {}
 
-
         # compute derived only if requested
         # if 'chirp_mass' in self.keys:
         #     params['chirp_mass'] = (m1 * m2)**(3/5) / (m1 + m2)**(1/5)
