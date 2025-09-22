@@ -137,26 +137,27 @@ class LitBNSDataModule(L.LightningDataModule):
             # Check if the file exists
             import os
             if not os.path.exists(self.split_indices_file):
-                raise FileNotFoundError(f"The file {self.split_indices_file} does not exist.")
-            # Load precomputed indices
-            self.indices = np.load(self.split_indices_file)
-        else:
-            # Get indices
-            num_samples = len(self.dataset)
-            indices = np.arange(num_samples)
-            np.random.seed(self.random_seed)
-            np.random.shuffle(indices)
-            
-            # Split indices
-            train_idx = int(self.train_split * num_samples)
-            val_idx = int((1-self.test_split) * num_samples)
+                # Get indices
+                num_samples = len(self.dataset)
+                indices = np.arange(num_samples)
+                np.random.seed(self.random_seed)
+                np.random.shuffle(indices)
+                
+                # Split indices
+                train_idx = int(self.train_split * num_samples)
+                val_idx = int((1-self.test_split) * num_samples)
 
-            self.indices = {
-                'train_indices': indices[:train_idx],
-                'val_indices': indices[train_idx:val_idx],
-                'test_indices': indices[val_idx:]
-            }
-            np.savez(self.split_indices_file, **self.indices)
+                self.indices = {
+                    'train_indices': indices[:train_idx],
+                    'val_indices': indices[train_idx:val_idx],
+                    'test_indices': indices[val_idx:]
+                }
+                np.savez(self.split_indices_file, **self.indices)
+            else:
+                # Load precomputed indices
+                self.indices = np.load(self.split_indices_file)
+        else:
+            raise ValueError('Please provide the path to split_indices_file.')
 
     def setup(self, stage: str):
         if not hasattr(self, 'dataset'):
