@@ -2,13 +2,14 @@ from pathlib import Path
 from datetime import datetime
 import torch
 from lightning.pytorch.cli import SaveConfigCallback, LightningCLI
-from lightning.fabric.utilities.cloud_io import get_filesystem
+from eval import BNSEval
 
 class CustomCallback(SaveConfigCallback):
     def __init__(self, parser, config, **kwargs):
         kwargs['save_to_log_dir'] = False
         logger_init_args = config.trainer.logger.init_args
-        self.config_dir_overwrite = Path.cwd() / logger_init_args.project / logger_init_args.id / 'config'
+        log_dir = Path.cwd() / logger_init_args.project / logger_init_args.id
+        self.config_dir_overwrite = log_dir / 'config'
         super().__init__(parser, config, **kwargs)
     
     def save_config(self, trainer, pl_module, stage):
@@ -21,7 +22,7 @@ class CustomCallback(SaveConfigCallback):
             self.config, config_path, skip_none=False, overwrite=self.overwrite, multifile=self.multifile
         )
 
-def train():
+def train() -> Path:
     try:
         torch.cuda.empty_cache()
         torch.set_float32_matmul_precision('medium')
@@ -30,29 +31,34 @@ def train():
         print('*** CUDA not available! ***')
         pass
     cli = LightningCLI(save_config_callback=CustomCallback)
+    logger_init_args = cli.config.fit.trainer.logger.init_args
+    log_dir = Path.cwd() / logger_init_args.project / logger_init_args.id
+    return log_dir
+
+def plot(log_dir: str | Path, save_suffix: str) -> None:
+    checkpoint_path = get_latest(Path(log_dir)/'checkpoints', '*.ckpt')
+    config_path = get_latest(Path(log_dir)/'config', '*.yaml')
+    save_path = Path(log_dir) / 'output'
+    bns_eval = BNSEval(config_path=config_path, checkpoint_path=checkpoint_path,
+                       save_path=save_path, save_suffix=save_suffix, compute_on_cpu=False)
+    bns_eval.trainer_callback()
+    return
+
+def get_latest(search_dir: str | Path, pattern: str='*.ckpt'):
+    # Select the latest file with extension
+    if Path(search_dir).exists():
+        files = sorted(search_dir.glob(pattern), key=lambda f: f.stat().st_mtime, reverse=True)
+        if files:
+            latest = files[0]
+        else:
+            raise RuntimeError(f'File does not exist in {search_dir}')
+    else:
+        raise RuntimeError(f'{search_dir} does not exist.')
+    return latest
+
+def run():
+    log_dir = train()
+    plot(log_dir, save_suffix='plot')
 
 if __name__=='__main__':
-    train()
-    # Print CUDA memory summary for debugging purposes
-    # current_directory = Path.cwd()
-    # outdir = Path(current_directory) / LightningCLI.trainer_class.logger.experiment.project / LightningCLI.trainer_class.logger.experiment.id
-    # outdir.mkdir(parents=True, exist_ok=True)
-    # config_path = Path(outdir) / 'config.yaml'
-    # print('Output directory:', outdir)
-
-    # ckpt_dir = outdir / 'checkpoints'
-    # # Select the latest checkpoint files
-    # if ckpt_dir.exists():
-    #     ckpt_files = sorted(ckpt_dir.glob('*.ckpt'), key=lambda f: f.stat().st_mtime, reverse=True)
-    #     last_ckpt = ckpt_files[0] if ckpt_files else None
-    # else:
-    #     last_ckpt = None
-    
-    # from eval import BNSEval
-    # print(config_path)
-    # bns_eval = BNSEval(
-    #     config_path=config_path,
-    #     checkpoint_path=last_ckpt,
-    #     csv_path=Path(outdir)/'outputs.csv'
-    # )
-    # bns_eval.trainer_callback()
+    run()
