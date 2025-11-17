@@ -11,8 +11,10 @@ class BNSDataset(Dataset):
         downsample_factor=1,
         start_time=0,
         end_time=64,
+        sample_rate=2048,
         scale_factor=1.,
-        normalize=False
+        normalize=False,
+        include_snr=False
     ):
         super().__init__()
         self.valid_keys = {
@@ -29,7 +31,7 @@ class BNSDataset(Dataset):
             # self.length = h5file.attrs['length'] # Number of samples.
             # self.num_injections = h5file.attrs['num_injections'] # Number of waveform injections.
             # self.sample_rate = self.h5file.attrs['sample_rate'] # Sample rate in Hz
-        self.sample_rate = 2048 # Sample rate in Hz
+        self.sample_rate = sample_rate # Sample rate in Hz
             # self.waveforms_h1 = self.h5file['waveforms/h1']
             # self.waveforms_l1 = self.h5file['waveforms/l1']
         self.data = self.h5file['data']
@@ -43,6 +45,7 @@ class BNSDataset(Dataset):
         self.start_time, self.end_time = start_time, end_time
         self.scale_factor = scale_factor
         self.normalize = normalize
+        self.include_snr = include_snr
 
     def _prepare_params_(self, idx: int):
         """
@@ -69,6 +72,10 @@ class BNSDataset(Dataset):
                 params['redshift'] = torch.tensor(self.h5file['distance'][idx], dtype=torch.float32)
             else:
                 params[k] = torch.tensor(self.h5file[k][idx], dtype=torch.float32)
+
+        if self.include_snr:
+            params['snr'] = torch.tensor(self.h5file['snr'][idx], dtype=torch.float32)
+        
         return params
 
     def __len__(self):
@@ -100,11 +107,13 @@ class LitBNSDataModule(L.LightningDataModule):
         start_time=0,
         end_time=64,
         scale_factor=1.,
+        sample_rate=2048,
         normalize=False,
         train_batch_size=1000, val_batch_size=1000, test_batch_size=1000,
         train_split=0.8, test_split=0.1,
         split_indices_file='',
-        random_seed=42
+        random_seed=42,
+        include_snr=False
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -114,6 +123,7 @@ class LitBNSDataModule(L.LightningDataModule):
         self.start_time = start_time
         self.end_time = end_time
         self.scale_factor = scale_factor
+        self.sample_rate = sample_rate
         self.normalize = normalize
         self.train_batch_size = train_batch_size
         self.val_batch_size = val_batch_size
@@ -122,6 +132,7 @@ class LitBNSDataModule(L.LightningDataModule):
         self.test_split = test_split
         self.split_indices_file = split_indices_file
         self.random_seed = random_seed
+        self.include_snr = include_snr
 
     def prepare_data(self):
         if hasattr(self, 'dataset'):
@@ -130,7 +141,9 @@ class LitBNSDataModule(L.LightningDataModule):
         self.dataset = BNSDataset(self.hdf5_path, variables=self.variables,
                                   downsample_factor=self.downsample_factor,
                                   start_time=self.start_time, end_time=self.end_time,
-                                  normalize=self.normalize, scale_factor=self.scale_factor)
+                                  sample_rate=self.sample_rate,
+                                  normalize=self.normalize, scale_factor=self.scale_factor,
+                                  include_snr=self.include_snr)
         if self.split_indices_file:
             if not self.split_indices_file.endswith('.npz'):
                 raise ValueError("split_indices_file must be a .npz file containing precomputed indices.")
@@ -173,10 +186,10 @@ class LitBNSDataModule(L.LightningDataModule):
             self.test_dataset = Subset(self.dataset, self.indices['test_indices'])
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.train_batch_size, shuffle=True)
+        return DataLoader(self.train_dataset, batch_size=self.train_batch_size, shuffle=True, num_workers=3)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.val_batch_size, shuffle=False, num_workers=1)
+        return DataLoader(self.val_dataset, batch_size=self.val_batch_size, shuffle=False, num_workers=3)
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.test_batch_size, shuffle=False)
