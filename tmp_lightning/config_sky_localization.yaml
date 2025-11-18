@@ -1,0 +1,70 @@
+trainer:
+  accelerator: auto
+  default_root_dir: bns_runs
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val/loss
+        mode: min
+        save_top_k: 1
+        save_on_train_epoch_end: true
+        filename: 'bns-ckpt-{epoch:02d}'
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/loss
+        patience: 60
+        mode: min
+        verbose: True
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: 'epoch'
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      id: my_run
+      name: dataloader_test_t_0_32_d256_l4_s4dlr5e-4_cosawr5e-4
+      project: sky_localization_test
+  log_every_n_steps: 1
+  max_epochs: 500
+  min_epochs: 1
+
+data:
+  class_path: data_regression.LitBNSDataModule
+  init_args:
+    variables: {'dec', 'phi'}
+    train_file: /n/holystore01/LABS/iaifi_lab/Lab/kyoon/DATA/bns_snr_8_20_powerlaw/train/sig_combined_train.h5
+    test_file: /n/holystore01/LABS/iaifi_lab/Lab/kyoon/DATA/bns_snr_8_20_powerlaw/test/sig_combined_test.h5
+    val_file: /n/holystore01/LABS/iaifi_lab/Lab/kyoon/DATA/bns_snr_8_20_powerlaw/val/sig_combined_val.h5
+    downsample_factor: 4
+    start_time: 0
+    end_time: 40
+    scale_factor: 1
+    sample_rate: 1024
+    normalize: False
+    train_batch_size: 32
+    val_batch_size: 32
+    test_batch_size: 32
+    include_snr: True
+    num_workers: 16
+
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 5e-4
+
+lr_scheduler:
+  class_path: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+  init_args:
+    T_0: 40
+
+model:
+  class_path: model_mean_only.LitS4ModelMeanOnly
+  init_args:
+    variables: {'dec', 'phi'}
+    d_input: 2
+    d_output: 2
+    d_model: 128
+    n_layers: 8
+    loss: MSELoss
+    dropout: 0.1
+    lr: 5e-4
